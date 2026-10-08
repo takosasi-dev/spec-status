@@ -1,0 +1,58 @@
+# SpecStatus の設定の雛形。<vault>\spec-status\data\config\<PC名>.toml に写して使う(§9.2)。
+# <PC名> は [pc] name。空なら platform.node()。
+# L: の無い PC では、tooldeck.toml・implroot.roots・handoff.handoffstub_toml を空にする(FR-15)。
+
+[pc]
+name = ""                                   # 空なら platform.node()
+
+[vault]
+spec_root = "仕様書MDファイル"               # vault からの相対
+exclude_dirs = ["Windows/Claude・開発ツール/Claude_skill"]
+exclude_files = ["仕様書MDファイル/00_OS別の整理について.md"]
+
+[docs]
+# [種類, 正規表現]。ファイル名(拡張子なし)に re.search で当て、上から最初に当たった物の種類にする
+kinds = [
+  ["非機能要件定義書", "非機能要件"],
+  ["要件定義書", "要件定義|(?i:requirements)"],
+  ["画面設計書", "画面設計|(?i:(?:^|[_-])ui[_-]design)"],
+  ["設計書", "設計書|(?i:(?:^|[_-])design(?:[_-]|$))"],
+  ["仕様書", "仕様書|(?i:(?:^|[_-])spec(?:[_-]|$))"],
+  ["プロンプト", "指示書|指示プロンプト|(?i:(?:^|[_-])prompt)"],
+]
+support = ["README.md", "CLAUDE.md", "HANDOFF.md"]
+
+[evidence.setsumei]
+dir = "説明書/Claude開発ツールについて"          # vault からの相対。"" なら読まない
+scope = ["Windows/Claude・開発ツール"]
+map = { "実装完了" = "実装完了", "一部未実装" = "一部未実装", "導入済み" = "実装完了" }
+
+[evidence.tooldeck]
+toml = "L:/Claude開発ツール/ToolDeck/tools.toml"  # L: の無い PC では "" にする
+scope = ["Windows/Claude・開発ツール"]
+map = { "実装完了" = "実装完了", "一部未実装" = "一部未実装" }
+
+[evidence.implroot]
+roots = ["L:/Claude開発ツール"]                  # L: の無い PC では []
+markers = ["NOTES.md"]
+scope = ["Windows/Claude・開発ツール"]
+
+[evidence.handoff]
+handoffstub_toml = "L:/Claude開発ツール/HandoffStub/handoffstub.toml"   # L: の無い PC では ""
+memo_dir = "引き続きメモ"
+scope = [""]
+
+[evidence.devlog]
+dir = "開発ログ"
+scope = [""]
+
+[output]
+board = "仕様書MDファイル/00_実装状況.md"         # vault からの相対。spec_root の直下だけ許す(INV-1)
+json = "仕様書MDファイル/00_実装状況.json"
+
+[board]
+recent_days = 7                                  # 「最近動いた物」に入れる日数
+recent_max = 20                                  # 「最近動いた物」の最大行数
+
+[gui]
+copy_template = "次の仕様書を実装して。着手する前に SpecStatus の show で状態を確かめること。\n仕様書: {abs_path}"

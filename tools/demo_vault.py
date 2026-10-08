@@ -1,0 +1,120 @@
+# 架空のプロジェクトだけを入れたお試し用の vault を作る(README のスクリーンショットもこれで撮る)。
+# 使い方: python tools/demo_vault.py <作る場所>
+#   できたら: python specstatus.py gui --vault <作る場所> --config <作る場所>/spec-status/data/config/demo.toml
+import os
+import shutil
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from specstatus import core  # noqa: E402
+
+CONFIG = """[pc]
+name = "pc"
+
+[vault]
+spec_root = "仕様書MDファイル"
+exclude_dirs = []
+exclude_files = []
+
+[docs]
+kinds = [["要件定義書", "要件定義"], ["画面設計書", "画面設計"], ["仕様書", "仕様書"]]
+support = ["README.md"]
+
+[evidence.setsumei]
+dir = ""
+[evidence.tooldeck]
+toml = ""
+[evidence.implroot]
+roots = []
+[evidence.handoff]
+handoffstub_toml = ""
+memo_dir = ""
+[evidence.devlog]
+dir = "開発ログ"
+scope = [""]
+
+[output]
+board = "仕様書MDファイル/00_実装状況.md"
+json = "仕様書MDファイル/00_実装状況.json"
+
+[board]
+recent_days = 7
+recent_max = 20
+"""
+
+# (仕様書フォルダ, 名前, 説明, フェーズ数, 記録: (状態, 終えたフェーズ, 待ち, メモ) か None)
+PROJECTS = [
+    ("Windows/QOLツール", "ClipNote", "クリップボード履歴", 4, ("実装完了", 4, "なし", "全フェーズ済み。v1.2 を配布中")),
+    ("Windows/QOLツール", "WinSnap", "窓の並べ替え", 5, ("一部未実装", 5, "確認待ち", "複数モニタの記憶だけ未実装")),
+    ("Windows/QOLツール", "FocusTimer", "集中タイマー", 4, ("着手済", 2, "確認待ち", "Phase 2 まで。通知音の選択待ち")),
+    ("Windows/QOLツール", "FontPeek", "フォント見比べ", 3, None),
+    ("Windows/開発ツール", "LogLens", "ログの絞り込み", 3, ("実装完了", 3, "なし", "テスト 84 件合格")),
+    ("Windows/開発ツール", "BuildBadge", "ビルド結果の札", 3, ("未着手", None, "なし", "優先度低")),
+    ("Windows/開発ツール", "DiffDesk", "差分ビューア", 4, ("撤退", 1, "なし", "既製品で足りたので中止")),
+    ("Android/家計簿アプリ", "Kakeibo", "家計簿", 3, ("着手済", 1, "実物待ち", "実機での確認待ち")),
+    ("Android/習慣アプリ", "HabitDots", "習慣トラッカー", 4, ("未着手", None, "なし", None)),
+    ("Web・ブラウザ/Chrome拡張", "TabShelf", "タブの棚", 3, ("実装完了", 3, "実物待ち", "ストア申請の結果待ち")),
+    ("Web・ブラウザ/Chrome拡張", "ReadLater", "あとで読む", 2, ("実装完了", 2, "なし", None)),
+    ("Web・ブラウザ/Chrome拡張", "PageTint", "ページの色替え", 3, ("一部未実装", 3, "なし", "ダークサイトの例外だけ残り")),
+    ("OS非依存/Obsidianプラグイン", "DailyCard", "日記カード", 3, None),
+    ("OS非依存/Obsidianプラグイン", "TagTidy", "タグの整理", 3, ("未着手", None, "なし", None)),
+    ("OS非依存/Discord", "RollBot", "ダイスBot", 2, ("実装完了", 2, "なし", "サーバーで稼働中")),
+    ("Linux/CLIツール", "dfwatch", "ディスク残量の見張り", 2, ("実装完了", 2, "なし", None)),
+    ("iOS/ウィジェット", "MoonWidget", "月齢ウィジェット", 3, None),
+]
+
+
+def spec_text(name: str, desc: str, phases: int) -> str:
+    rows = "\n".join(f"| {i} | {desc}の段階 {i} |" for i in range(1, phases + 1))
+    return (f"---\n作成日: 2026-09-01\n---\n# {name} 仕様書\n\n{desc}のツール(架空)。\n\n"
+            f"## 実装フェーズ\n\n| Phase | 内容 |\n|---|---|\n{rows}\n")
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(__doc__ or "python tools/demo_vault.py <作る場所>", file=sys.stderr)
+        return 2
+    vault = os.path.abspath(sys.argv[1])
+    if os.path.exists(vault):
+        # 前に作ったお試し用だけ消して作り直す。ほかのフォルダは消さない
+        if os.listdir(vault) and not os.path.isfile(os.path.join(vault, "spec-status", "data", "config", "demo.toml")):
+            print(f"空でないフォルダには作りません: {vault}", file=sys.stderr)
+            return 2
+        shutil.rmtree(vault)
+    for d in ("説明書", "開発ログ", "work", "spec-status/data/config", "spec-status/data/events"):
+        os.makedirs(os.path.join(vault, d), exist_ok=True)
+    cfg = os.path.join(vault, "spec-status", "data", "config", "demo.toml")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write(CONFIG)
+    for folder, name, desc, phases, _ in PROJECTS:
+        d = os.path.join(vault, "仕様書MDファイル", folder, name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{name}_{desc}_仕様書.md"), "w", encoding="utf-8") as f:
+            f.write(spec_text(name, desc, phases))
+    board = core.load(vault, cfg)
+    by_name = {ps.project.name: ps for ps in board.statuses}
+    for folder, name, desc, phases, rec in PROJECTS:
+        if rec is None:
+            continue
+        state, done, waiting, note = rec
+        fields = {"state": state, "waiting": waiting, "last_phase": phases}
+        if done is not None:
+            fields["done_phase"] = done
+        if note:
+            fields["note"] = note
+        if state in ("着手済", "一部未実装", "実装完了"):
+            work = os.path.join(vault, "work", name)
+            os.makedirs(work, exist_ok=True)
+            fields["impl_add"] = [work.replace("\\", "/")]
+        code, msg = core.write_mark(board, by_name[name], fields, "user")
+        if code:
+            print("記録できません:", name, msg, file=sys.stderr)
+            return 1
+    code, msg, _ = core.build(vault, cfg)
+    print(f"作りました: {vault}(build {code})")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
