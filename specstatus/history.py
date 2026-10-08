@@ -1,0 +1,87 @@
+# 時間の流れを見る: ある日の状態の復元・週ごとの推移・止まっている物(最後に動いた日)・週の範囲。
+# 状態の復元は記録(history)だけを使い、記録の無い時期は記録以外の証拠の状態とみなす(日付の無い証拠のため近似)。
+from __future__ import annotations
+
+import os
+import subprocess
+from datetime import date, timedelta
+from typing import Callable
+
+from .model import ProjectStatus
+
+DOING = ("着手済", "一部未実装")
+GIT_TIMEOUT_S = 5
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # 窓の exe から呼んでも黒い窓を出さない
+
+
+def _baseline(ps: ProjectStatus) -> str | None:
+    """記録が無いときの状態 = 記録以外の証拠で決まる状態。"""
+    if ps.decided_by["source"] not in ("events", "none"):
+        return ps.state
+    return next((e.state for e in ps.evidence if e.source != "events" and e.state), None)
+
+
+def state_at(ps: ProjectStatus, day: str) -> str | None:
+    """day(YYYY-MM-DD)の終わりの状態。今日以降なら今の状態。"""
+    state, found = None, False
+    for r in ps.folded.history:
+        if r.at[:10] > day:
+            break
+        if "state" in r.fields:
+            state, found = r.fields["state"], True
+    if found and state is not None:
+        return state
+    return _baseline(ps)
+
+
+def series(statuses: list[ProjectStatus], today: date, weeks: int) -> list[tuple[str, int, int]]:
+    """週ごと(今日から7日刻みでさかのぼる)の (日付 YYYY-MM-DD, 実装完了の数, 途中の数)。古い順。最後は今の状態。"""
+    out = []
+    for i in range(weeks - 1, -1, -1):
+        day = (today - timedelta(days=7 * i)).isoformat()
+        states = [ps.state if i == 0 else state_at(ps, day) for ps in statuses]
+        out.append((day, states.count("実装完了"), sum(s in DOING for s in states)))
+    return out
+
+
+def week_range(day: date) -> tuple[date, date]:
+    """day を含む月曜〜日曜。"""
+    mon = day - timedelta(days=day.weekday())
+    return mon, mon + timedelta(days=6)
+
+
+def git_last_date(path: str) -> str | None:
+    """path の git の最後のコミット日(YYYY-MM-DD)。git でない・git が無いなら None。"""
+    try:
+        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", path, "log", "-1", "--format=%cs"],
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT_S, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = r.stdout.strip()
+    return out if r.returncode == 0 and len(out) == 10 else None
+
+
+def impl_dirs(ps: ProjectStatus) -> list[str]:
+    """この PC にある実装フォルダ(記録と、名前の一致の証拠)。"""
+    paths = [i.path for i in ps.folded.impl if i.exists_here]
+    paths += [e.value for e in ps.evidence if e.source == "implroot"]
+    if ps.decided_by["source"] == "implroot":
+        paths.append(ps.decided_by["value"])
+    return list(dict.fromkeys(paths))
+
+
+def mark_stale(statuses: list[ProjectStatus], today: date, stale_days: int,
+               git_date: Callable[[str], str | None] = git_last_date) -> None:
+    """途中(着手済・一部未実装)の物に最後に動いた日を付け、stale_days 日以上動いていなければ stale_days に日数を入れる。"""
+    for ps in statuses:
+        if ps.state not in DOING:
+            continue
+        r = ps.folded.last_record
+        dates = [r.at[:10] if r else None, ps.last_devlog_date] + [git_date(p) for p in impl_dirs(ps)]
+        dates = [d for d in dates if d]
+        if not dates:
+            continue
+        ps.last_activity = max(dates)
+        days = (today - date.fromisoformat(ps.last_activity)).days
+        if days >= stale_days:
+            ps.stale_days = days

@@ -16,6 +16,9 @@ RATIO = "実装完了 {done} / {total}({pct}%)"
 ROW_COUNT = "{n} 件を表示 / 全 {total} 件"
 WAITING_ONLY = "待ちだけ"
 CONFLICT_ONLY = "食い違いだけ"
+STALE_ONLY = "止まっている物だけ"
+PROGRESS = "推移({weeks}週)"
+PROGRESS_TIP = "実装完了 {first} → {last}"
 RELOAD = "再読み込み"
 OPEN_BOARD = "一覧ノートを開く"
 GENERATED = "読み込み: {at} ({pc})"
@@ -36,6 +39,7 @@ COLUMNS = (
     ("last", "最後の記録"),
     ("source", "根拠"),
     ("conflict", "食い違い"),
+    ("github", "公開"),
 )
 CONFLICT_MARK = "!"
 SORT_ASC = " ▲"
@@ -59,7 +63,11 @@ DETAIL_FIELDS = (          # 詳細の表(キー → 見出し)
     ("phase", "Phase"),
     ("waiting", "待ち"),
     ("note", "メモ"),
+    ("activity", "最後に動いた日"),
+    ("github", "GitHub"),
 )
+STALE_TEXT = "{date}({days} 日止まっている)"
+GITHUB_TEXT = "{repo}\n{release} / push {pushed} / CI {ci}"
 DOCS = "文書(ダブルクリックで Obsidian)"
 IMPLS = "実装フォルダ"
 IMPL_MISSING = "{path}  (この PC に無い: {pc})"

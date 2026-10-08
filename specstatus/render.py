@@ -1,10 +1,11 @@
-# Board を、表(標準出力)・一覧ノート(§9.5)・JSON(§9.6)の文字列にする。
+# Board を、表(標準出力)・一覧ノート(§9.5)・JSON(§9.6)・週のまとめの文字列にする。
 # 同じ Board と同じ日付なら同じ文字列になる(INV-6)。本文は写さない(INV-7)。ファイルは書かない。
 from __future__ import annotations
 
 import json
 from datetime import date, timedelta
 
+from .history import series, state_at, week_range
 from .model import STATES, Board, Evidence, ProjectStatus
 from .textutil import fold
 
@@ -12,6 +13,7 @@ SOURCE_LABEL = {"events": "記録", "setsumei": "説明書", "tooldeck": "ToolDe
                 "implroot": "実装フォルダ", "handoff": "引き継ぎメモ", "none": "なし"}
 BY_LABEL = {"user": "私", "claude-code": "Claude Code", "claude": "Claude"}
 WAITING_TURN = ("確認待ち", "実物待ち")
+PROGRESS_WEEKS = 12      # [board] progress_weeks が無いとき
 
 
 def os_dir(ps: ProjectStatus) -> str:
@@ -41,6 +43,14 @@ def evidence_text(e: Evidence) -> str:
 def last_text(ps: ProjectStatus) -> str:
     r = ps.folded.last_record
     return f"{r.at[:10]}({BY_LABEL.get(r.by, r.by)})" if r else ""
+
+
+def github_text(gh: dict | None) -> str:
+    """表の「公開」の欄: 最新の版(無ければ「公開」)。CI が成功以外なら添える。"""
+    if not gh:
+        return ""
+    ci = f" CI {gh['ci']}" if gh.get("ci") and gh["ci"] != "成功" else ""
+    return (gh.get("release") or "公開") + ci
 
 
 def cell(s: str | None) -> str:
@@ -90,6 +100,9 @@ def project_json(ps: ProjectStatus) -> dict:
         "impl_paths": [{"path": i.path, "pc": i.pc, "exists_here": i.exists_here} for i in f.impl],
         "last_record": {"at": r.at, "by": r.by, "pc": r.pc} if r else None,
         "conflicts": [_ev(e) for e in ps.conflicts],
+        "github": ps.github,
+        "last_activity": ps.last_activity,
+        "stale_days": ps.stale_days,
     }
 
 
@@ -131,6 +144,7 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
         "| 状態 | 件数 |", "|---|---|",
     ]
     out += [f"| {s} | {sum(1 for p in st if p.state == s)} |" for s in STATES]
+    out += progress_section(st, today, board.config.get("board", {}).get("progress_weeks", PROGRESS_WEEKS))
 
     turn = sorted((p for p in st if p.waiting in WAITING_TURN),
                   key=lambda p: (p.folded.last_record.at if p.folded.last_record else "", board_order(p)))
@@ -138,6 +152,13 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
             "| プロジェクト | 待ち | Phase | 最後の記録 | メモ |", "|---|---|---|---|---|"]
     out += [f"| {link(p)} | {p.waiting} | {phase_text(p)} | {cell(last_text(p))} | {cell(p.folded.note)} |"
             for p in turn]
+
+    stale = sorted((p for p in st if p.stale_days), key=lambda p: (-p.stale_days, board_order(p)))
+    out += ["", f"## 止まっている物({len(stale)})", "",
+            "着手済・一部未実装のまま動いていない物。最後に動いた日 = 記録・開発ログ・実装フォルダの git の新しい方。", "",
+            "| プロジェクト | 状態 | 待ち | 最後に動いた日 | 日数 | メモ |", "|---|---|---|---|---|---|"]
+    out += [f"| {link(p)} | {p.state} | {p.waiting} | {p.last_activity} | {p.stale_days} | {cell(p.folded.note)} |"
+            for p in stale]
 
     days = board.config.get("board", {}).get("recent_days", 7)
     limit = board.config.get("board", {}).get("recent_max", 20)
@@ -157,6 +178,15 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
         out += [f"| {link(p)} | {cell(p.project.spec_dir)} | {phase_text(p)} | {cell(source_text(p.decided_by))} | "
                 f"{cell(last_text(p))} | {p.last_devlog_date or ''} | {cell(p.folded.note)} |" for p in rows]
 
+    gh = sorted((p for p in st if p.github), key=lambda p: (p.github["pushed_at"], fold(p.project.name)), reverse=True)
+    if gh or board.github_note:
+        out += ["", f"## GitHub({len(gh)})", ""]
+        if board.github_note:
+            out += [cell(board.github_note), ""]
+        out += ["| プロジェクト | リポジトリ | 版 | 最後の push | CI | 状態 |", "|---|---|---|---|---|---|"]
+        out += [f"| {link(p)} | [{p.github['repo']}]({p.github['url']}) | {p.github['release'] or '-'} | "
+                f"{p.github['pushed_at']} | {p.github['ci'] or '-'} | {p.state} |" for p in gh]
+
     conf = [p for p in st if p.conflict]
     out += ["", f"## 食い違い({len(conf)})", "", "| プロジェクト | 決めた根拠 | 食い違う証拠 |", "|---|---|---|"]
     out += [f"| {link(p)} | {cell(source_text(p.decided_by))} | "
@@ -172,4 +202,67 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     if board.unreadable:
         out += ["", "## 読めなかった証拠", ""]
         out += [f"- {u.reader}: {cell(u.path)} {cell(u.reason)}".rstrip() for u in board.unreadable]
+    return "\n".join(out) + "\n"
+
+
+# ---- 進み具合の推移・週のまとめ -----------------------------------------------------
+
+def progress_section(st: list[ProjectStatus], today: date, weeks: int) -> list[str]:
+    """Obsidian がそのまま描ける Mermaid の折れ線。"""
+    pts = series(st, today, weeks)
+    top = max([d for _, d, _ in pts] + [1])
+    return ["", "## 進み具合の推移", "",
+            "週ごとの数。上の線が実装完了、下の線が途中(着手済・一部未実装)。記録より前の時期は、記録以外の証拠の状態で数えた近似。", "",
+            "```mermaid", "xychart-beta",
+            "    x-axis [" + ", ".join(f'"{d[5:]}"' for d, _, _ in pts) + "]",
+            f'    y-axis "件数" 0 --> {top + 5 - top % 5}',
+            "    line [" + ", ".join(str(d) for _, d, _ in pts) + "]",
+            "    line [" + ", ".join(str(n) for _, _, n in pts) + "]",
+            "```"]
+
+
+def weekly_markdown(board: Board, day: date, today: date, dup_stems: set[str]) -> str:
+    """day を含む週(月〜日)のまとめ: 状態の数の増減・状態が変わった物・あなたの番になった物・止まっている物・GitHub。"""
+    st = board.statuses
+    link = lambda ps: _link(ps, dup_stems)  # noqa: E731
+    mon, sun = week_range(day)
+    start, end = mon.isoformat(), sun.isoformat()
+    before = (mon - timedelta(days=1)).isoformat()
+    at = lambda ps, d: (ps.state if d >= today.isoformat() else state_at(ps, d)) or "証拠なし"  # noqa: E731
+    out = ["---", "tags:", "  - 仕様書", "  - 週報", "  - 自動生成", "---",
+           f"# 実装状況の週まとめ({mon.month}/{mon.day}〜{sun.month}/{sun.day})", "",
+           f"自動生成(SpecStatus `weekly`、{today.isoformat()})。作り直すと上書きされる。", "",
+           "| 状態 | 週の初め | 週の終わり | 増減 |", "|---|---|---|---|"]
+    for s in STATES:
+        a, b = sum(at(p, before) == s for p in st), sum(at(p, end) == s for p in st)
+        out.append(f"| {s} | {a} | {b} | {b - a:+d} |")
+
+    changed = []
+    for p in st:
+        a, b = at(p, before), at(p, end)
+        if a != b:
+            recs = [r for r in p.folded.history if start <= r.at[:10] <= end and "state" in r.fields]
+            changed.append((p, a, b, recs[-1] if recs else None))
+    out += ["", f"## 状態が変わった物({len(changed)})", "", "| プロジェクト | 前 | 後 | 日付 | 誰 |", "|---|---|---|---|---|"]
+    out += [f"| {link(p)} | {a} | {b} | {r.at[:10] if r else ''} | {BY_LABEL.get(r.by, r.by) if r else ''} |"
+            for p, a, b, r in changed]
+
+    turn = []
+    for p in st:
+        w = [r for r in p.folded.history if "waiting" in r.fields]
+        if p.waiting in WAITING_TURN and w and start <= w[-1].at[:10] <= end:
+            turn.append((p, w[-1].at[:10]))
+    out += ["", f"## あなたの番になった物({len(turn)})", "", "| プロジェクト | 待ち | 日付 | メモ |", "|---|---|---|---|"]
+    out += [f"| {link(p)} | {p.waiting} | {d} | {cell(p.folded.note)} |" for p, d in turn]
+
+    stale = sorted((p for p in st if p.stale_days), key=lambda p: -p.stale_days)
+    out += ["", f"## 止まっている物({len(stale)})", "", "| プロジェクト | 状態 | 最後に動いた日 | 日数 |", "|---|---|---|---|"]
+    out += [f"| {link(p)} | {p.state} | {p.last_activity} | {p.stale_days} |" for p in stale]
+
+    gh = [p for p in st if p.github and (start <= p.github["pushed_at"] <= end
+                                         or start <= (p.github["release_at"] or "") <= end)]
+    if gh:
+        out += ["", f"## GitHub で動いた物({len(gh)})", "", "| プロジェクト | リポジトリ | 版 | 最後の push |", "|---|---|---|---|"]
+        out += [f"| {link(p)} | [{p.github['repo']}]({p.github['url']}) | {p.github['release'] or '-'} | "
+                f"{p.github['pushed_at']} |" for p in gh]
     return "\n".join(out) + "\n"

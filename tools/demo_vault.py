@@ -4,10 +4,11 @@
 import os
 import shutil
 import sys
+from datetime import datetime, timedelta
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from specstatus import core  # noqa: E402
+from specstatus import core, records  # noqa: E402
 
 CONFIG = """[pc]
 name = "pc"
@@ -41,6 +42,8 @@ json = "仕様書MDファイル/00_実装状況.json"
 [board]
 recent_days = 7
 recent_max = 20
+stale_days = 30
+progress_weeks = 12
 """
 
 # (仕様書フォルダ, 名前, 説明, フェーズ数, 記録: (状態, 終えたフェーズ, 待ち, メモ) か None)
@@ -63,6 +66,11 @@ PROJECTS = [
     ("Linux/CLIツール", "dfwatch", "ディスク残量の見張り", 2, ("実装完了", 2, "なし", None)),
     ("iOS/ウィジェット", "MoonWidget", "月齢ウィジェット", 3, None),
 ]
+
+# 記録した日(今日から何日前か)。推移のグラフが育ち、Kakeibo が「止まっている物」になるようにばらす
+DAYS_AGO = {"ClipNote": 77, "LogLens": 63, "DiffDesk": 60, "Kakeibo": 45, "TabShelf": 42, "ReadLater": 35,
+            "RollBot": 28, "PageTint": 21, "dfwatch": 14, "WinSnap": 9, "BuildBadge": 6, "HabitDots": 5,
+            "TagTidy": 4, "FocusTimer": 2}
 
 
 def spec_text(name: str, desc: str, phases: int) -> str:
@@ -107,6 +115,8 @@ def main() -> int:
             work = os.path.join(vault, "work", name)
             os.makedirs(work, exist_ok=True)
             fields["impl_add"] = [work.replace("\\", "/")]
+        at = datetime.now().astimezone() - timedelta(days=DAYS_AGO.get(name, 0))
+        records.now_iso = lambda at=at: at.isoformat(timespec="seconds")
         code, msg = core.write_mark(board, by_name[name], fields, "user")
         if code:
             print("記録できません:", name, msg, file=sys.stderr)

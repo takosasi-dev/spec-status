@@ -1,26 +1,27 @@
 # 中核の入口: 設定→発見→まとめ→証拠→記録→決定 を通して Board を作り(load)、記録を1行足し(write_mark)、出力2ファイルを書く(build)。
-# CLI も GUI もここだけを呼ぶ(INV-11)。書くのは記録ファイルの追記と出力2ファイルだけ(INV-1)。
+# CLI も GUI もここだけを呼ぶ(INV-11)。書くのは記録ファイルの追記と出力2ファイルだけ(INV-1)。例外は weekly が書く週のまとめ1つ。
 from __future__ import annotations
 
 import importlib
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
-from . import records
+from . import github, history, records
 from .config import ConfigError, events_dir, load_config, load_registry, pc_name
 from .decide import decide
 from .find import find_docs
 from .group import group_docs
 from .model import (BY_VALUES, EVIDENCE_SOURCES, RECORDABLE_STATES, WAITINGS, Board, Doc, Evidence,
                     Orphan, Project, ProjectStatus, Record, Unreadable)
-from .render import board_json, board_markdown, board_order
-from .textutil import fold, in_scope, nfc, norm_path, slash
+from .render import board_json, board_markdown, board_order, weekly_markdown
+from .textutil import fold, in_scope, nfc, norm_path, resolve, slash
 
 NOTE_MAX = 200
 LINE_MAX_BYTES = 4096
 REPLACE_TRIES = 3
 REPLACE_WAIT_S = 0.2
+STALE_DAYS = 30           # [board] stale_days が無いとき
 FIELD_ORDER = ("state", "done_phase", "last_phase", "waiting", "note", "impl_add", "impl_remove", "confirmed", "undo")
 CONTENT_KEYS = FIELD_ORDER[:7]
 
@@ -88,13 +89,15 @@ def load(vault: str, config_path: str | None) -> Board:
 
     statuses = [decide(p, records.fold(bound.get(p.key, [])), found.get(p.key, {})) for p in projects]
     statuses.sort(key=board_order)
+    history.mark_stale(statuses, date.today(), cfg.get("board", {}).get("stale_days", STALE_DAYS))
+    github_note = github.attach(statuses, cfg)
     os_dirs = sorted((n for n in os.listdir(spec_root) if os.path.isdir(os.path.join(spec_root, n))), key=fold)
     board = Board(
         vault=vault, pc_name=pc_name(cfg), config=cfg, docs=docs, statuses=statuses,
         unreadable=unreadable + ev_unreadable, skipped_evidence=skipped,
         record_problems=problems, orphans=orphans, folders_without_specs=no_spec,
         registry_issues=issues + merge_issues + rename_issues, record_count=len(recs),
-        os_dirs=[nfc(n) for n in os_dirs], reader_failed=bool(ev_unreadable),
+        os_dirs=[nfc(n) for n in os_dirs], reader_failed=bool(ev_unreadable), github_note=github_note,
     )
     output_paths(board)          # 出力先が許可外なら GUI のエラー表示にも出るよう、読む段で止める
     return board
@@ -298,6 +301,24 @@ def build(vault: str, config_path: str | None) -> tuple[int, str, Board | None]:
         names = "・".join(dict.fromkeys(u.reader for u in board.unreadable if u.reader != "find"))
         return 3, f"読めなかった証拠があります: {names}", board
     return 0, "", board
+
+
+def weekly_path(board: Board, day: date) -> str:
+    """週のまとめの置き場所: <vault>/<[weekly] dir>/<その週の金曜>_実装状況.md(週報と同じ日付の付け方)。"""
+    rel = (board.config.get("weekly", {}).get("dir") or "").strip()
+    if not rel:
+        raise ConfigError("設定に [weekly] dir がありません(週のまとめの置き場所)")
+    friday = history.week_range(day)[0] + timedelta(days=4)
+    return os.path.join(resolve(board.vault, rel), f"{friday.isoformat()}_実装状況.md")
+
+
+def write_weekly(board: Board, day: date) -> str:
+    """週のまとめを書き(同じ週の物は上書き)、パスを返す。書くのは SpecStatus が作ったこのファイルだけ。"""
+    path = weekly_path(board, day)
+    if not os.path.isdir(os.path.dirname(path)):
+        raise ConfigError(f"週のまとめの置き場所がありません: {os.path.dirname(path)}")
+    _replace(path, weekly_markdown(board, day, date.today(), _dup_stems(board.vault)))
+    return path
 
 
 def problem_lines(board: Board) -> list[str]:

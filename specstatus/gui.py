@@ -10,11 +10,12 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.parse
+import webbrowser
 from collections import deque
-from datetime import datetime
+from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 
-from . import core
+from . import core, history
 from . import guilogic as G
 from . import strings as S
 from . import theme
@@ -108,6 +109,11 @@ class App:
         self.scope_lbl.pack(side="left")
         self.ratio_lbl = ttk.Label(top, text="", style="PanelMuted.TLabel")
         self.ratio_lbl.pack(side="left", padx=px(10))
+        self.spark = tk.Canvas(top, width=px(160), height=px(22), background=p["panel"], highlightthickness=0,
+                               borderwidth=0)
+        self.spark.pack(side="right")
+        self.spark_lbl = ttk.Label(top, text="", style="PanelMuted.TLabel")
+        self.spark_lbl.pack(side="right", padx=px(8))
         self.bar = tk.Canvas(summary, height=px(10), background=p["panel"], highlightthickness=0, borderwidth=0)
         self.bar.grid(row=1, column=0, sticky="ew", pady=(px(6), px(8)))
         self.bar.bind("<Configure>", lambda e: self._draw_bar())
@@ -136,6 +142,9 @@ class App:
                         command=self.refresh_table).pack(side="left", padx=px(4))
         ttk.Checkbutton(tools, text=S.CONFLICT_ONLY, variable=self.conflict_var,
                         command=self.refresh_table).pack(side="left", padx=px(4))
+        self.stale_var = tk.BooleanVar()
+        ttk.Checkbutton(tools, text=S.STALE_ONLY, variable=self.stale_var,
+                        command=self.refresh_table).pack(side="left", padx=px(4))
         self.count_lbl = ttk.Label(tools, text="", style="Muted.TLabel")
         self.count_lbl.pack(side="right")
 
@@ -159,16 +168,18 @@ class App:
         cols = [k for k, _ in S.COLUMNS[1:]]     # 状態は #0 の列に丸と一緒に出す
         self.tree = ttk.Treeview(self.table, columns=cols, show="tree headings", selectmode="extended")
         widths = {"state": 112, "name": 200, "spec_dir": 200, "phase": 56, "waiting": 68,
-                  "last": 120, "source": 130, "conflict": 72}
+                  "last": 120, "source": 130, "conflict": 72, "github": 84}
         for k, title in S.COLUMNS:
             cid = "#0" if k == "state" else k
             self.tree.heading(cid, text=title, anchor="w", command=lambda c=k: self.sort_by(c))
             self.tree.column(cid, width=px(widths[k]), minwidth=px(40), stretch=False,
                              anchor="center" if k in ("phase", "conflict") else "w")
-        self.tree.configure(displaycolumns=[c for c in cols if c != "spec_dir"])   # 仕様書フォルダは左の分類と詳細で見る
+        # 仕様書フォルダは左の分類と詳細で、食い違いは赤い行と「食い違いだけ」で見る
+        self.tree.configure(displaycolumns=[c for c in cols if c not in ("spec_dir", "conflict")])
         self.tree.tag_configure("stripe", background=p["stripe"])
         self.tree.tag_configure("none", foreground=p["muted"])
         self.tree.tag_configure("conflict", foreground=p["error"])
+        self.tree.tag_configure("stale", foreground=p["states"]["一部未実装"])
         ys = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=ys.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -205,9 +216,11 @@ class App:
         """左の分類と右の詳細の幅を決める(PanedWindow は最初に中身の希望の幅で分けてしまうため)。"""
         self.root.update_idletasks()
         w = self.pane.winfo_width()
-        if w > 1:
-            self.pane.sashpos(0, self.px(230))
-            self.pane.sashpos(1, max(self.px(600), w - self.px(420)))
+        if w <= 1:          # まだ窓の大きさが決まっていない
+            self.root.after(50, self._place_sashes)
+            return
+        self.pane.sashpos(0, self.px(230))
+        self.pane.sashpos(1, max(self.px(600), w - self.px(420)))
 
     def _build_side(self, pane) -> None:
         px = self.px
@@ -224,9 +237,9 @@ class App:
         self.side.bind("<<TreeviewSelect>>", lambda e: self._on_category())
         self.category: str | None = None
 
-    def _listbox(self, parent, height: int, grow: bool = False) -> tk.Listbox:
+    def _listbox(self, parent, height: int, grow: bool = False, side: str = "top") -> tk.Listbox:
         f = ttk.Frame(parent, style="Panel.TFrame")
-        f.pack(fill="both" if grow else "x", expand=grow, pady=(0, self.px(10)))
+        f.pack(side=side, fill="both" if grow else "x", expand=grow, pady=(0, self.px(6)))
         lb = tk.Listbox(f, height=height, activestyle="none", exportselection=False, font=self.font)
         theme.style_listbox(lb, self.p)
         sb = ttk.Scrollbar(f, orient="vertical", command=lb.yview)
@@ -250,12 +263,18 @@ class App:
         self.d_grid.pack(fill="x", pady=(0, px(10)))
         self.d_grid.columnconfigure(1, weight=1)
         self.d_info: dict[str, ttk.Label] = {}
+        self.d_labels: dict[str, ttk.Label] = {}
         for i, (k, label) in enumerate(S.DETAIL_FIELDS):
-            ttk.Label(self.d_grid, text=label, style="PanelMuted.TLabel").grid(row=i, column=0, sticky="nw",
-                                                                               padx=(0, px(12)), pady=px(1))
+            lab = ttk.Label(self.d_grid, text=label, style="PanelMuted.TLabel")
+            lab.grid(row=i, column=0, sticky="nw", padx=(0, px(12)), pady=px(1))
             v = ttk.Label(self.d_grid, text="", style="Panel.TLabel", wraplength=px(290), justify="left")
             v.grid(row=i, column=1, sticky="w", pady=px(1))
-            self.d_info[k] = v
+            self.d_info[k], self.d_labels[k] = v, lab
+        self.d_github_url = ""
+        self.d_info["github"].bind("<Button-1>", lambda e: self.d_github_url and webbrowser.open(self.d_github_url))
+        # 履歴は下から先に詰める(窓が低いとき、後から詰めた証拠の欄の方が縮むように)
+        self.d_hist = self._listbox(d, 2, grow=True, side="bottom")
+        ttk.Label(d, text=S.HISTORY, style="Section.TLabel").pack(side="bottom", anchor="w", pady=(0, px(3)))
         ttk.Label(d, text=S.DOCS, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
         self.d_docs = self._listbox(d, 2)
         self.d_docs.bind("<Double-Button-1>", lambda e: self.open_doc())
@@ -271,9 +290,7 @@ class App:
         for b in (self.impl_open, self.impl_add, self.impl_rm):
             b.pack(side="left", padx=(0, px(4)))
         ttk.Label(d, text=S.EVIDENCE, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
-        self.d_ev = self._listbox(d, 3)
-        ttk.Label(d, text=S.HISTORY, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
-        self.d_hist = self._listbox(d, 2, grow=True)
+        self.d_ev = self._listbox(d, 2)
         self.d_impl_paths: list = []
 
     def _build_edit(self) -> None:
@@ -400,7 +417,8 @@ class App:
             keep = {self.rows[i].project.key for i in self.tree.selection() if i in self.rows}
         self._refresh_summary()
         rows = G.filter_rows(self.board.statuses, {s for s, v in self.chip_vars.items() if v.get()}, self.category,
-                             self.waiting_var.get(), self.conflict_var.get(), self.search_var.get())
+                             self.waiting_var.get(), self.conflict_var.get(), self.search_var.get(),
+                             self.stale_var.get())
         if self.sort:
             rows = G.sort_rows(rows, *self.sort)
         self.tree.delete(*self.tree.get_children())
@@ -415,6 +433,8 @@ class App:
                 tags.append("conflict")
             elif ps.state == "証拠なし":
                 tags.append("none")
+            elif ps.stale_days:
+                tags.append("stale")
             self.tree.insert("", "end", iid=iid, text=vals[0], image=self.dots.get(ps.state, ""), values=vals[1:],
                              tags=tags)
             if ps.project.key in keep:
@@ -441,6 +461,7 @@ class App:
             v.set(False)
         self.waiting_var.set(False)
         self.conflict_var.set(False)
+        self.stale_var.set(False)
         self.search_var.set("")
         self.category = None
         if self.side.exists("__all__"):
@@ -477,6 +498,27 @@ class App:
         self.ratio_lbl.configure(text=S.RATIO.format(done=done, total=total, pct=round(100 * done / total) if total else 0))
         self.bar_counts = counts
         self._draw_bar()
+        weeks = self.board.config.get("board", {}).get("progress_weeks", 12)
+        self._draw_spark(history.series(scope, date.today(), weeks), weeks)
+
+    def _draw_spark(self, pts: list[tuple[str, int, int]], weeks: int) -> None:
+        """実装完了の数の週ごとの折れ線(一覧ノートの「進み具合の推移」の上の線と同じ数)。"""
+        c = self.spark
+        c.delete("all")
+        w, h, pad = int(c.cget("width")), int(c.cget("height")), self.px(3)
+        vals = [d for _, d, _ in pts]
+        self.spark_lbl.configure(text=S.PROGRESS.format(weeks=weeks) + "  " +
+                                 S.PROGRESS_TIP.format(first=vals[0], last=vals[-1]) if vals else "")
+        if len(vals) < 2:
+            return
+        lo, hi = min(vals), max(vals)
+        xy = []
+        for i, v in enumerate(vals):
+            xy += [pad + (w - 2 * pad) * i / (len(vals) - 1),
+                   h - pad - (h - 2 * pad) * ((v - lo) / (hi - lo) if hi > lo else 0.5)]
+        color = self.p["states"]["実装完了"]
+        c.create_line(*xy, fill=color, width=max(1, self.px(2)))
+        c.create_oval(xy[-2] - pad, xy[-1] - pad, xy[-2] + pad, xy[-1] + pad, fill=color, width=0)
 
     def _draw_bar(self) -> None:
         c = self.bar
@@ -512,6 +554,8 @@ class App:
             self.d_badge.pack_forget()
             for v in self.d_info.values():
                 v.configure(text="")
+            self.d_github_url = ""
+            self.d_info["github"].configure(cursor="")
             self._update_impl_buttons()
             return
         ps = sel[0]
@@ -522,9 +566,14 @@ class App:
         self.d_badge.pack(anchor="w", pady=(self.px(6), self.px(10)), before=self.d_grid)
         info = {"source": G.source_text(ps), "where": ps.decided_by.get("path") or "-",
                 "spec_dir": ps.project.spec_dir, "phase": G.phase_text(ps), "waiting": ps.waiting,
-                "note": ps.folded.note or "-"}
+                "note": ps.folded.note or "-", "activity": G.activity_text(ps), "github": G.github_detail(ps)}
+        self.d_github_url = (ps.github or {}).get("url") or ""
+        self.d_info["github"].configure(cursor="hand2" if self.d_github_url else "")
         for k, v in self.d_info.items():
             v.configure(text=info[k])
+            if k in ("activity", "github"):         # 無いときは行ごと隠して、下の欄に場所を譲る
+                for w in (v, self.d_labels[k]):
+                    w.grid() if info[k] != "-" else w.grid_remove()
         for doc in ps.project.docs:
             self.d_docs.insert("end", f"{doc.kind}  {doc.path}")
         for ip in ps.folded.impl:

@@ -74,3 +74,10 @@ def where(board: Board, folder: str) -> list[ProjectStatus]
 - テスト: `tests/test_guilogic.py`(AC-39・AC-42 の確認後の関数・AC-43 の戻す値の計算)。core を呼ぶテストは書かない(core は並行して作っている)。
 - `start_gui.cmd`: `pyw -3 "%~dp0specstatus.py" gui`。`pyw` が無ければ `pythonw`。どちらも無ければ理由を出して `pause`。
 - `specstatus.py gui` からの入口は `gui.run(vault: str, config_path: str | None) -> int`。
+
+## 5. 時間の流れと GitHub(2026-10-09 に追加)
+
+- `history.py`: `state_at(ps, day) -> str | None`、`series(statuses, today, weeks) -> [(日付, 実装完了, 途中)]`、`week_range(day) -> (月, 日)`、`mark_stale(statuses, today, stale_days, git_date=git_last_date)`(`ps.last_activity` と `ps.stale_days` を付ける)。
+- `github.py`: `attach(statuses, cfg, now=None, fetch=http_get, path=None) -> str`(`ps.github` を付け、止めた理由を返す。`[github] owner` が空なら何もしない)。
+- `core.load` が両方を呼ぶ。`core.write_weekly(board, day) -> パス`、`render.weekly_markdown(board, day, today, dup_stems)`、`render.github_text(gh)`。
+- テストは `tests/test_timeline.py`(git と通信は差し替える)。

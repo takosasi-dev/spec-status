@@ -1,4 +1,4 @@
-# CLI の7つのサブコマンド(list / show / where / mark / build / check / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
+# CLI のサブコマンド(list / show / where / mark / build / check / weekly / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
 # 書き込みは mark と build が core 経由で行うだけ。終了コードは §9.7。
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import date
 
 from . import core, render
 from .config import ConfigError, load_config
@@ -29,6 +30,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--state", action="append", choices=STATES, default=[])
     p.add_argument("--waiting", action="store_true")
     p.add_argument("--conflict", action="store_true")
+    p.add_argument("--stale", action="store_true")
     p.add_argument("--os")
     p.add_argument("--json", action="store_true")
 
@@ -56,6 +58,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--by", default="user")
     p.add_argument("--confirmed", action="store_true")
     p.add_argument("--no-build", action="store_true")
+
+    p = sub.add_parser("weekly", parents=[common])
+    p.add_argument("--date", type=date.fromisoformat, default=None, help="この日を含む週(既定は今日)")
+    p.add_argument("--write", action="store_true", help="標準出力でなく [weekly] dir に書く")
 
     for name in ("build", "check", "gui"):
         sub.add_parser(name, parents=[common])
@@ -102,6 +108,11 @@ def _show(board: Board, ps: ProjectStatus, n: int, as_json: bool) -> None:
         note = f"  ({e.note})" if e.note else ""
         _out(f"  {render.evidence_text(e)}  {e.where}{note}{flag}")
     _out(f"開発ログの最新: {ps.last_devlog_date or '-'}")
+    if ps.last_activity:
+        _out(f"最後に動いた日: {ps.last_activity}" + (f"  ({ps.stale_days} 日止まっている)" if ps.stale_days else ""))
+    if ps.github:
+        g = ps.github
+        _out(f"GitHub: {g['repo']}  版 {g['release'] or '-'}  最後の push {g['pushed_at']}  CI {g['ci'] or '-'}  {g['url']}")
     _out(f"記録の履歴(新しい順・{len(hist)} 件):")
     for h in hist:
         _out("  " + json.dumps(h, ensure_ascii=False))
@@ -185,6 +196,8 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
     read_code = 3 if board.reader_failed else 0
     if board.reader_failed:
         _err("読めなかった証拠: " + " / ".join(f"{u.reader}({u.reason})" for u in board.unreadable if u.reader != "find"))
+    if board.github_note:
+        _err(board.github_note)
 
     if a.cmd == "list":
         rows = board.statuses
@@ -194,6 +207,8 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
             rows = [p for p in rows if p.waiting != "なし"]
         if a.conflict:
             rows = [p for p in rows if p.conflict]
+        if a.stale:
+            rows = [p for p in rows if p.stale_days]
         if a.os:
             rows = [p for p in rows if fold(render.os_dir(p)) == fold(a.os)]
         _out(json.dumps([render.project_json(p) for p in rows], ensure_ascii=False, indent=2) if a.json
@@ -225,6 +240,21 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
             _out(ln)
         _out(f"問題 {len(lines)} 件")
         return 1 if lines else read_code
+
+    if a.cmd == "weekly":
+        day = a.date or date.today()
+        if not a.write:
+            _out(render.weekly_markdown(board, day, date.today(), core._dup_stems(board.vault)))
+            return read_code
+        try:
+            _out(f"書きました: {core.write_weekly(board, day)}")
+        except ConfigError as e:
+            _err(str(e))
+            return 2
+        except OSError as e:
+            _err(f"週のまとめを書けません: {e}")
+            return 2
+        return read_code
 
     if a.cmd == "mark":
         fields = _mark_fields(a)

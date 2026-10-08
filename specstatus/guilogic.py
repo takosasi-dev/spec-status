@@ -38,8 +38,8 @@ def category_tree(statuses: list[ProjectStatus]) -> list[tuple[str, str, str, in
 
 
 def filter_rows(statuses: list[ProjectStatus], states: set[str], category: str | None,
-                waiting_only: bool, conflict_only: bool, query: str) -> list[ProjectStatus]:
-    """状態の札(どれか)・分類(仕様書フォルダの先頭)・待ち・食い違い・検索語で絞る。並びは保つ。"""
+                waiting_only: bool, conflict_only: bool, query: str, stale_only: bool = False) -> list[ProjectStatus]:
+    """状態の札(どれか)・分類(仕様書フォルダの先頭)・待ち・食い違い・検索語・止まっている物で絞る。並びは保つ。"""
     q = fold(query.strip())
     out = []
     for ps in statuses:
@@ -50,6 +50,8 @@ def filter_rows(statuses: list[ProjectStatus], states: set[str], category: str |
         if waiting_only and ps.waiting == "なし":
             continue
         if conflict_only and not ps.conflict:
+            continue
+        if stale_only and not ps.stale_days:
             continue
         if q and q not in fold(ps.project.name) and q not in fold(ps.project.spec_dir):
             continue
@@ -75,6 +77,7 @@ _SORT_KEYS = {
     "last": _last_key,
     "source": lambda ps: fold(source_text(ps)),
     "conflict": lambda ps: ps.conflict,
+    "github": lambda ps: (ps.github is None, (ps.github or {}).get("pushed_at") or ""),
 }
 
 
@@ -98,7 +101,21 @@ def last_record_text(ps: ProjectStatus) -> str:
 def row_values(ps: ProjectStatus) -> tuple[str, ...]:
     """表の1行。並びは strings.COLUMNS と同じ。"""
     return (ps.state, ps.project.name, ps.project.spec_dir, phase_text(ps), ps.waiting,
-            last_record_text(ps), source_text(ps), S.CONFLICT_MARK if ps.conflict else "")
+            last_record_text(ps), source_text(ps), S.CONFLICT_MARK if ps.conflict else "",
+            render.github_text(ps.github))
+
+
+def activity_text(ps: ProjectStatus) -> str:
+    if not ps.last_activity:
+        return "-"
+    return S.STALE_TEXT.format(date=ps.last_activity, days=ps.stale_days) if ps.stale_days else ps.last_activity
+
+
+def github_detail(ps: ProjectStatus) -> str:
+    g = ps.github
+    if not g:
+        return "-"
+    return S.GITHUB_TEXT.format(repo=g["repo"], release=g["release"] or "-", pushed=g["pushed_at"], ci=g["ci"] or "-")
 
 
 def count_by_state(statuses: list[ProjectStatus]) -> dict[str, int]:

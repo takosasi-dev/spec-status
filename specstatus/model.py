@@ -140,6 +140,9 @@ class ProjectStatus:
     conflicts: list[Evidence]
     folded: Folded
     last_devlog_date: str | None = None
+    github: dict | None = None          # github.attach が付ける {repo, url, pushed_at, release, release_at, ci}
+    last_activity: str | None = None    # 最後に動いた日 YYYY-MM-DD(記録・開発ログ・実装フォルダの git の新しい方)
+    stale_days: int | None = None       # 止まっている物なら、最後に動いてからの日数
 
     @property
     def conflict(self) -> bool:
@@ -174,3 +177,4 @@ class Board:
     record_count: int
     os_dirs: list[str]                  # spec_root 直下のフォルダ名(GUI の OS の選択)
     reader_failed: bool = False         # 読み手のどれかが例外で落ちた(終了コード 3)
+    github_note: str = ""               # GitHub を取りに行けなかった等の一言(終了コードには響かない)

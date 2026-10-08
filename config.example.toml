@@ -53,6 +53,17 @@ json = "仕様書MDファイル/00_実装状況.json"
 [board]
 recent_days = 7                                  # 「最近動いた物」に入れる日数
 recent_max = 20                                  # 「最近動いた物」の最大行数
+stale_days = 30                                  # 着手済・一部未実装のまま、この日数動かなければ「止まっている物」
+progress_weeks = 12                              # 「進み具合の推移」の週の数
+
+[weekly]
+dir = ""                                         # weekly --write の置き場所(vault からの相対。例 "週報")。"" なら書かない
+
+[github]
+owner = ""                                       # 公開リポジトリの持ち主(GitHub のユーザー名)。"" なら GitHub を見ない
+refresh_hours = 6                                # これより古い結果だけ取り直す(登録不要の API は1時間60回まで)
+# 名前が英数字だけで一致しない物の結び方(プロジェクト名か仕様書フォルダ -> リポジトリ名。"" は結ばない)
+repos = {}
 
 [gui]
 copy_template = "次の仕様書を実装して。着手する前に SpecStatus の show で状態を確かめること。\n仕様書: {abs_path}"

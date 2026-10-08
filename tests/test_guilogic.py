@@ -103,8 +103,8 @@ def test_sort_each_column_both_ways():
 
 def test_row_values():
     assert G.row_values(A) == ("実装完了", "Alpha", "Windows/ツール/Alpha", "3/5", "なし",
-                               "2026-10-01(Claude Code)", "説明書: 実装完了", "")
-    assert G.row_values(B)[3:] == ("-", "確認待ち", "2026-10-05(私)", "記録: 着手済", "!")
+                               "2026-10-01(Claude Code)", "説明書: 実装完了", "", "")
+    assert G.row_values(B)[3:] == ("-", "確認待ち", "2026-10-05(私)", "記録: 着手済", "!", "")
     assert G.row_values(C)[5:7] == ("", "なし")
     assert G.row_values(D)[3] == "1/?"
 
