@@ -5,7 +5,8 @@ from __future__ import annotations
 import tkinter as tk
 
 from . import render
-from .guilogic import vulns_text
+from . import strings as S
+from .guilogic import extra_details, vulns_text
 from .model import ProjectStatus
 
 DELAY_MS = 500
@@ -41,6 +42,9 @@ def tooltip_text(ps: ProjectStatus) -> str:
     if ps.stale_days:
         add(L_STALE, STALE_VALUE.format(days=ps.stale_days, date=ps.last_activity or "-"))
     add(L_RELEASE, (ps.github or {}).get("release"))
+    extra = extra_details(ps)               # v0.7.0 の欄(記録漏れ・未確定・見込みなど)。詳細の欄と同じ文字
+    for key, label in S.EXTRA_FIELDS:
+        add(label, extra.get(key))
     return "\n".join(lines)
 
 

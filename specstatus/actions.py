@@ -17,15 +17,21 @@ M_STATE = "状態を変える"
 M_WAITING = "待ちを変える"
 M_COPY = "Claude Code に渡す文をコピー"
 M_DIFF = "仕様書の差分を渡す文をコピー"
+M_RESUME = "再開用の指示文をコピー"
 HELP_TITLE = "キー操作"
 HELP_CLOSE = "Esc で閉じる"
 
 KEY_HELP = [
     ("1〜5", "状態を変える(" + "・".join(f"{i}={s}" for i, s in enumerate(RECORDABLE_STATES, 1)) + ")"),
     ("W", "待ちを順に変える(なし → 確認待ち → 実物待ち)"),
-    ("/", "検索欄へ"),
-    ("Enter", "Obsidian で開く"),
+    ("/ ・ Ctrl+F", "検索欄へ(検索欄の Esc で消して表に戻る)"),
+    ("Enter", "Obsidian で開く(メモ欄では記録する)"),
     ("F2", "メモを書く"),
+    ("Ctrl+Z", "記録を取り消す"),
+    ("F5", "読み直す"),
+    ("Ctrl+1/2/3", "表・カード・概要"),
+    ("F6", "分類 → 表 → 詳細と移る"),
+    ("Ctrl+ホイール", "文字の大きさ"),
     ("?", "この一覧"),
     ("右クリック", "操作のメニュー"),
 ]
@@ -45,6 +51,15 @@ def _diff_prompt(ps: ProjectStatus) -> str | None:
     try:
         from . import snapshots
         return snapshots.diff_prompt(ps) if snapshots.diff(ps) is not None else None
+    except Exception:            # 並行して作っている部品。どう壊れていてもメニューは出す
+        return None
+
+
+def _resume_prompt(ps: ProjectStatus) -> str | None:
+    """担当 4 の resume が無い・作れないときは None(メニューに出さない)。"""
+    try:
+        from . import resume
+        return resume.prompt(ps) or None
     except Exception:            # 並行して作っている部品。どう壊れていてもメニューは出す
         return None
 
@@ -79,6 +94,9 @@ def build_menu(app, ps_list: list[ProjectStatus]) -> tk.Menu:
         prompt = _diff_prompt(single)
         if prompt:
             m.add_command(label=M_DIFF, command=lambda: app.copy_text(prompt))
+        resume_text = _resume_prompt(single)
+        if resume_text:
+            m.add_command(label=M_RESUME, command=lambda: app.copy_text(resume_text, single.project.name))
     return m
 
 

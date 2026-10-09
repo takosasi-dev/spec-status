@@ -213,9 +213,10 @@ def _save(path: str, cache: dict) -> None:
 
 
 def attach(statuses: list[ProjectStatus], cfg: dict, now: float | None = None, post: Post = http_post,
-           path: str | None = None, get: Get | None = None) -> str:
+           path: str | None = None, get: Get | None = None, offline: bool = False) -> str:
     """設定 [osv] enabled が true のときだけ。この PC にある実装フォルダのロックファイルを読み、ps.vulns を付ける。
-    get を省くと、post も本物のときだけ詳細を聞く(post を差し替えたテストで通信しない)。"""
+    get を省くと、post も本物のときだけ詳細を聞く(post を差し替えたテストで通信しない)。
+    offline なら OSV.dev に聞かず、残してある結果だけで付ける(記録の後の読み直しを速くする)。"""
     if get is None and post is http_post:
         get = http_get_json
     sec = cfg.get("osv", {})
@@ -238,15 +239,18 @@ def attach(statuses: list[ProjectStatus], cfg: dict, now: float | None = None, p
     cache.pop("_version", None)
     now = time.time() if now is None else now
     start = time.monotonic()
-    note = _refresh(cache, set().union(*(p for _, p in found.values())), now, sec.get("refresh_hours", REFRESH_HOURS), post)
-    _save(path, cache)
+    note = ""
+    if not offline:
+        note = _refresh(cache, set().union(*(p for _, p in found.values())), now,
+                        sec.get("refresh_hours", REFRESH_HOURS), post)
+        _save(path, cache)
     dpath = os.path.join(os.path.dirname(path), "osv_vulns.json")
     dcache = _load(dpath)
     dcache.pop("_version", None)
     hits_by = {}
     for key, (files, pkgs) in found.items():
         hits_by[key] = sorted((p, cache[_key(p)]["ids"]) for p in pkgs if cache.get(_key(p), {}).get("ids"))
-    if get is not None and not note:
+    if get is not None and not note and not offline:
         note = _fetch_details(dcache, {i for hs in hits_by.values() for _, ids in hs for i in ids}, now, get, start)
         _save(dpath, dcache)
     for ps in statuses:

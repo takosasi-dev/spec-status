@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
-from . import recommend
+from . import deps, gaps, pace, recommend, worklog
 from .history import series, state_at, week_range
 from .model import STATES, Board, Evidence, ProjectStatus
 from .textutil import fold
@@ -128,6 +128,12 @@ def project_json(ps: ProjectStatus) -> dict:
         "spec_changed": ps.spec_changed,
         "ac": {"checked": ps.ac[0], "total": ps.ac[1]} if ps.ac else None,
         "vulns": ps.vulns,
+        "pace": ps.pace,
+        "gap": ps.gap,
+        "questions": ps.questions,
+        "retreat": ps.retreat,
+        "blocked_by": ps.blocked_by,
+        "eol": ps.eol,
     }
 
 
@@ -154,6 +160,22 @@ def _link(ps: ProjectStatus, dup_stems: set[str]) -> str:
     return f"[[{target}\\|{cell(ps.project.name)}]]"
 
 
+def _num(v) -> str:
+    return "-" if v is None else str(v)
+
+
+def runtime_text(e: dict) -> str:
+    """「Python 3.8(2024-10-07 に切れた)」。切れる前は「〜に切れる」。"""
+    return "・".join(f"{r['name']} {r['version']}({r['eol'] or '?'} に{'切れた' if r['ended'] else '切れる'})"
+                    for r in e["runtimes"])
+
+
+def outdated_text(e: dict, limit: int = 5) -> str:
+    """「react 17 → 19・…ほか 3」。遅れの大きい順。"""
+    items = [f"{d['package']} {d['version']} → {d['latest']}" for d in e["outdated"]]
+    return "・".join(items[:limit]) + (f" ほか {len(items) - limit}" if len(items) > limit else "")
+
+
 def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str]) -> str:
     """generated: 「2026-10-08 23:40」の形。dup_stems: vault の中で2つ以上ある md のファイル名(fold 済み)。"""
     st = board.statuses
@@ -170,6 +192,7 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     ]
     out += [f"| {s} | {sum(1 for p in st if p.state == s)} |" for s in STATES]
     out += progress_section(st, today, board.config.get("board", {}).get("progress_weeks", PROGRESS_WEEKS))
+    out += ["", pace.overall(st, today)["text"]]
     out += [""] + recommend.section(st, today, link)
 
     turn = sorted((p for p in st if p.waiting in WAITING_TURN),
@@ -185,6 +208,21 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
             "| プロジェクト | 状態 | 待ち | 最後に動いた日 | 日数 | メモ |", "|---|---|---|---|---|---|"]
     out += [f"| {link(p)} | {p.state} | {p.waiting} | {p.last_activity} | {p.stale_days} | {cell(p.folded.note)} |"
             for p in stale]
+
+    out += [""] + gaps.section(st, link) if any(p.gap for p in st) else []
+
+    due = [p for p in st if p.retreat and p.retreat["due"]]
+    if due:
+        out += ["", f"## 撤退の判定の時期({len(due)})", "",
+                "仕様書の撤退基準で判定するフェーズまで進んだ物。続けるかやめるかを決める。", "",
+                "| プロジェクト | 状態 | Phase | 判定の期日 | 基準 |", "|---|---|---|---|---|"]
+        out += [f"| {link(p)} | {p.state} | {phase_text(p)} | {cell(p.retreat['phase'])} | "
+                f"{'・'.join(p.retreat['ids'])} |" for p in due]
+
+    graph = deps.mermaid(st)
+    if graph:
+        out += ["", f"## 前提が終わっていない物({sum(1 for p in st if p.blocked_by)})", "",
+                "仕様書の前提の節で、別の仕様書に頼っている物。矢印は前提 → 使う側。", ""] + graph
 
     changed = sorted((p for p in st if p.spec_changed), key=lambda p: (p.spec_changed, board_order(p)), reverse=True)
     out += ["", f"## 仕様が変わった物({len(changed)})", "",
@@ -202,6 +240,16 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
         out += [f"| {link(p)} | {p.vulns['count']} | {p.vulns.get('worst') or '-'} | "
                 f"{cell(fix_text(p.vulns))} | {p.vulns['total']} |" for p in vul]
 
+    old = sorted((p for p in st if p.eol), key=lambda p: (-len([r for r in p.eol['runtimes'] if r['ended']]),
+                                                          -len(p.eol['outdated']), board_order(p)))
+    if old or board.eol_note:
+        out += ["", f"## 依存の古さ({len(old)})", "",
+                "実装のランタイムのサポート期限(endoflife.date)と、依存が最新の版から遅れている物(PyPI・npm)。比べるのは先頭の数字だけ。", ""]
+        if board.eol_note:
+            out += [cell(board.eol_note), ""]
+        out += ["| プロジェクト | ランタイム | 遅れている依存 |", "|---|---|---|"]
+        out += [f"| {link(p)} | {cell(runtime_text(p.eol))} | {cell(outdated_text(p.eol))} |" for p in old]
+
     days = board.config.get("board", {}).get("recent_days", 7)
     limit = board.config.get("board", {}).get("recent_max", 20)
     since = (today - timedelta(days=days - 1)).isoformat()
@@ -211,6 +259,9 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     out += ["", f"## 最近動いた物({len(recent)})", "",
             "| プロジェクト | 状態 | Phase | 最後の記録 |", "|---|---|---|---|"]
     out += [f"| {link(p)} | {p.state} | {phase_text(p)} | {cell(last_text(p))} |" for p in recent]
+    work = worklog.section(board.vault, board.config, st, today, link)
+    if work:
+        out += [""] + work
 
     for s in STATES:
         rows = [p for p in st if p.state == s]
@@ -226,10 +277,11 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
         out += ["", f"## GitHub({len(gh)})", ""]
         if board.github_note:
             out += [cell(board.github_note), ""]
-        out += ["| プロジェクト | リポジトリ | 版 | 最後の push | CI | Issue | 状態 | バッジ |",
-                "|---|---|---|---|---|---|---|---|"]
+        out += ["| プロジェクト | リポジトリ | 版 | 最後の push | CI | Issue | スター | ダウンロード | 状態 | バッジ |",
+                "|---|---|---|---|---|---|---|---|---|---|"]
         out += [f"| {link(p)} | [{p.github['repo']}]({p.github['url']}) | {p.github['release'] or '-'} | "
-                f"{p.github['pushed_at']} | {p.github['ci'] or '-'} | {p.github.get('issues') or 0} | {p.state} | "
+                f"{p.github['pushed_at']} | {p.github['ci'] or '-'} | {p.github.get('issues') or 0} | "
+                f"{_num(p.github.get('stars'))} | {_num(p.github.get('downloads'))} | {p.state} | "
                 f"{badges(p.github)} |" for p in gh]
 
     conf = [p for p in st if p.conflict]
@@ -310,4 +362,7 @@ def weekly_markdown(board: Board, day: date, today: date, dup_stems: set[str]) -
         out += ["", f"## GitHub で動いた物({len(gh)})", "", "| プロジェクト | リポジトリ | 版 | 最後の push |", "|---|---|---|---|"]
         out += [f"| {link(p)} | [{p.github['repo']}]({p.github['url']}) | {p.github['release'] or '-'} | "
                 f"{p.github['pushed_at']} |" for p in gh]
+    work = worklog.section(board.vault, board.config, st, min(sun, today), link)
+    if work:
+        out += [""] + work
     return "\n".join(out) + "\n"

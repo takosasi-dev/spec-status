@@ -75,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("next", parents=[common])
     p.add_argument("--limit", type=int, default=5)
 
+    p = sub.add_parser("gaps", parents=[common])
+
+    p = sub.add_parser("resume", parents=[common])
+    p.add_argument("target")
+
     p = sub.add_parser("diff", parents=[common])
     p.add_argument("target")
     p.add_argument("--prompt", action="store_true", help="Claude Code に渡す文の形で出す")
@@ -139,6 +144,9 @@ def _show(board: Board, ps: ProjectStatus, n: int, as_json: bool) -> None:
     if ps.github:
         g = ps.github
         _out(f"GitHub: {g['repo']}  版 {g['release'] or '-'}  最後の push {g['pushed_at']}  CI {g['ci'] or '-'}  {g['url']}")
+    from . import guilogic
+    for k, v in guilogic.extra_details(ps).items():
+        _out(f"{dict(guilogic.S.EXTRA_FIELDS).get(k, k)}: {v}")
     _out(f"記録の履歴(新しい順・{len(hist)} 件):")
     for h in hist:
         _out("  " + json.dumps(h, ensure_ascii=False))
@@ -216,7 +224,7 @@ def _update(vault: str, check_only: bool) -> int:
         _out(f"{rel['tag']} に更新できます(specstatus.py update)。")
         return 1
     try:
-        _out(update.update_vault(vault, rel["tag"]))
+        _out(update.update_vault(vault, rel["tag"], zip_url=rel.get("vault_zip"), sums=rel.get("sums")))
     except (update.UpdateError, OSError) as e:
         _err(f"更新できませんでした: {e}")
         return 2
@@ -317,6 +325,22 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
             _out(f"{score:>4}  {ps.project.name}  ({ps.state})  {'・'.join(reasons)}")
         if not picks:
             _out("今すぐ手を付けるべき物はありません。")
+        return read_code
+
+    if a.cmd == "gaps":
+        rows = [p for p in board.statuses if p.gap]
+        for ps in rows:
+            _out(f"{ps.project.name}  ({ps.state})  {ps.gap}")
+        _out(f"記録漏れかも {len(rows)} 件" if rows else "記録より後に動いた物はありません。")
+        return read_code
+
+    if a.cmd == "resume":
+        from . import resume
+        ps, cands = core.resolve_target(board, a.target)
+        if ps is None:
+            _candidates(cands)
+            return 4
+        _out(resume.prompt(ps))
         return read_code
 
     if a.cmd == "diff":

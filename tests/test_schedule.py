@@ -1,10 +1,12 @@
-# 朝の知らせとタスク登録(schedule)のテスト: 前回から増えた物の数え方、schtasks の引数、
-# /TR が長いときの .cmd、通知の PowerShell の文。schtasks・PowerShell は差し替え、本物は呼ばない。
+# 朝の知らせとタスク登録(schedule)のテスト: 前回から増えた物の数え方、通知が出せた後だけ状態を残すこと、
+# schtasks /XML に渡す定義(UTF-16・StartWhenAvailable・週のまとめを登録しない PC)、通知の PowerShell の文。
+# schtasks・PowerShell は差し替え、本物は呼ばない。
 from __future__ import annotations
 
 import argparse
 import base64
 import os
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 from specstatus import schedule as S
@@ -115,50 +117,84 @@ VAULT = r"E:\Obsidian 保管\Claude"
 PY = r"C:\Program Files\Python311\pythonw.exe"
 
 
-def test_install_command_lines(tmp_path):
-    f = Fake()
+class XmlFake(Fake):
+    """渡された XML の一時ファイルを、消される前に読んでおく。"""
+
+    def __call__(self, args):
+        self.xml = getattr(self, "xml", [])
+        if "/XML" in args:
+            raw = open(args[args.index("/XML") + 1], "rb").read()
+            assert raw[:2] == b"\xff\xfe"                       # UTF-16(BOM 付き)
+            self.xml.append(ET.fromstring(raw.decode("utf-16").split("?>", 1)[1]))
+        return super().__call__(args)
+
+
+NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+
+
+def test_install_registers_xml(tmp_path):
+    f = XmlFake()
     out = S.install(VAULT, PY, None, runner=f, folder=str(tmp_path))
     n, w = f.calls
-    script = os.path.join(VAULT, "spec-status", "specstatus.py")
-    assert n[:5] == ["schtasks", "/Create", "/TN", "SpecStatus 朝の知らせ", "/TR"]
-    assert n[5] == f'"{PY}" "{script}" notify --vault "{VAULT}"'
-    assert n[6:] == ["/SC", "DAILY", "/ST", "09:00", "/F"]
+    assert n[:5] == ["schtasks", "/Create", "/TN", "SpecStatus 朝の知らせ", "/XML"] and n[6:] == ["/F"]
     assert w[3] == "SpecStatus 週のまとめ"
-    assert w[5] == f'"{PY}" "{script}" weekly --write --vault "{VAULT}"'
-    assert w[6:] == ["/SC", "WEEKLY", "/D", "FRI", "/ST", "18:00", "/F"]
-    assert out == ["登録しました: SpecStatus 朝の知らせ(毎日 9:00)", "登録しました: SpecStatus 週のまとめ(毎週金曜 18:00)"]
-    assert os.listdir(tmp_path) == []
-    # subprocess に渡したときの引用符(schtasks は \" で読む)
-    import subprocess
-    assert '"\\"C:\\Program Files' in subprocess.list2cmdline(n)
+    script = os.path.join(VAULT, "spec-status", "specstatus.py")
+    nx, wx = f.xml
+    assert nx.findtext("t:Actions/t:Exec/t:Command", namespaces=NS) == PY
+    assert nx.findtext("t:Actions/t:Exec/t:Arguments", namespaces=NS) == f'"{script}" notify --vault "{VAULT}"'
+    assert wx.findtext("t:Actions/t:Exec/t:Arguments", namespaces=NS) == f'"{script}" weekly --write --vault "{VAULT}"'
+    for x in (nx, wx):
+        assert x.findtext("t:Settings/t:StartWhenAvailable", namespaces=NS) == "true"
+        assert x.findtext("t:Principals/t:Principal/t:LogonType", namespaces=NS) == "InteractiveToken"
+    assert nx.find("t:Triggers/t:CalendarTrigger/t:ScheduleByDay", NS) is not None
+    assert nx.findtext("t:Triggers/t:CalendarTrigger/t:StartBoundary", namespaces=NS).endswith("T09:00:00")
+    assert wx.find("t:Triggers/t:CalendarTrigger/t:ScheduleByWeek/t:DaysOfWeek/t:Friday", NS) is not None
+    assert wx.findtext("t:Triggers/t:CalendarTrigger/t:StartBoundary", namespaces=NS).endswith("T18:00:00")
+    assert out[0].startswith("登録しました: SpecStatus 朝の知らせ(毎日 9:00") and "週のまとめ(毎週金曜 18:00" in out[1]
+    assert os.listdir(tmp_path) == []                    # 一時ファイルは残さない
 
 
-def test_install_with_config():
-    f = Fake()
+def test_install_with_config_and_long_paths(tmp_path):
+    f = XmlFake()
     cfg = os.path.abspath("設定 フォルダ/c.toml")
-    S.install(VAULT, PY, "設定 フォルダ/c.toml", runner=f)
-    assert f.calls[0][5].endswith(f' --config "{cfg}"')
+    vault = "E:\\" + "長い名前のフォルダ & <記号>" * 20      # /XML なので /TR の 261 文字の上限は無い
+    S.install(vault, PY, "設定 フォルダ/c.toml", runner=f, folder=str(tmp_path))
+    args = f.xml[0].findtext("t:Actions/t:Exec/t:Arguments", namespaces=NS)
+    assert args.endswith(f' --config "{cfg}"') and f'--vault "{os.path.abspath(vault)}"' in args
 
 
-def test_install_long_tr_uses_launcher(tmp_path):
-    f = Fake()
-    vault = "E:\\" + "長い名前のフォルダ" * 20
-    out = S.install(vault, PY, None, runner=f, folder=str(tmp_path))
-    n, w = f.calls
-    assert n[5] == f'"{tmp_path / "notify.cmd"}"' and w[5] == f'"{tmp_path / "weekly.cmd"}"'
-    text = (tmp_path / "notify.cmd").read_bytes().decode("utf-8")
-    assert text.startswith("@echo off\r\nchcp 65001 >nul\r\nstart \"\" ")
-    assert f'notify --vault "{vault}"' in text
-    assert any("起動用のファイル" in ln for ln in out)
+def test_install_without_weekly_removes_it(tmp_path):
+    f = XmlFake()
+    out = S.install(VAULT, PY, None, runner=f, folder=str(tmp_path), weekly=False)
+    assert [c[1] for c in f.calls] == ["/Create", "/Delete"]
+    assert f.calls[1] == ["schtasks", "/Delete", "/TN", "SpecStatus 週のまとめ", "/F"]
+    assert "weekly = false" in out[1] and "消しました" in out[1]
 
 
-def test_install_failure_raises():
+def test_install_failure_raises(tmp_path):
     try:
-        S.install(VAULT, PY, runner=Fake(1, err="アクセスが拒否されました"))
+        S.install(VAULT, PY, runner=Fake(1, err="アクセスが拒否されました"), folder=str(tmp_path))
     except OSError as e:
         assert "拒否" in str(e)
     else:
         raise AssertionError("OSError が出ない")
+    assert os.listdir(tmp_path) == []                    # 失敗しても一時ファイルは残さない
+
+
+def test_run_install_reads_weekly_setting(tmp_path, monkeypatch):
+    got = {}
+
+    def install(vault, python, config, weekly):
+        got["weekly"] = weekly
+        return []
+    monkeypatch.setattr(S, "load_config", lambda vault, path: {"schedule": {"weekly": False}})
+    monkeypatch.setattr(S, "install", install)
+    assert S.run(argparse.Namespace(cmd="schedule", action="install", python=None, config=None), str(tmp_path)) == 0
+    assert got == {"weekly": False}
+    monkeypatch.setattr(S, "load_config", lambda vault, path: {})
+    got.clear()
+    S.run(argparse.Namespace(cmd="schedule", action="install", python=None, config=None), str(tmp_path))
+    assert got == {"weekly": True}                       # 既定は登録する
 
 
 def test_remove_and_status():
@@ -196,3 +232,19 @@ def test_run_notify_config_error(tmp_path, monkeypatch):
         raise ConfigError("設定がありません")
     monkeypatch.setattr(core, "load", boom)
     assert S.run(argparse.Namespace(cmd="notify", config=None, quiet=True), str(tmp_path)) == 2
+
+
+def test_run_notify_saves_state_only_after_toast(tmp_path, monkeypatch):
+    from specstatus import core
+    monkeypatch.setattr(core, "load", lambda vault, cfg: board(ps("A", "W/A", waiting="確認待ち")))
+    st = os.path.join(os.environ["LOCALAPPDATA"], "SpecStatus", "notify.json")
+
+    def fail(title, body):
+        raise OSError("通知を出せません")
+    monkeypatch.setattr(S, "toast", fail)
+    args = argparse.Namespace(cmd="notify", config=None, quiet=False)
+    assert S.run(args, str(tmp_path)) == 2 and not os.path.exists(st)     # 出せなかった → 次もまた知らせる
+    shown = []
+    monkeypatch.setattr(S, "toast", lambda title, body: shown.append(title))
+    assert S.run(args, str(tmp_path)) == 0 and shown == ["SpecStatus: 新しく 1 件"] and os.path.isfile(st)
+    assert S.run(args, str(tmp_path)) == 0 and len(shown) == 1              # 出せた後は同じ物を繰り返さない

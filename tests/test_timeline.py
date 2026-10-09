@@ -49,7 +49,7 @@ def test_mark_stale():
     assert (old.last_activity, old.stale_days) == ("2026-08-20", 50)
     assert (fresh.last_activity, fresh.stale_days) == ("2026-10-01", None)
     assert done.last_activity is None
-    assert asked == ["C:/impl/old", "C:/impl/fresh"]          # この PC に無いフォルダと、途中でない物は見ない
+    assert sorted(asked) == ["C:/impl/fresh", "C:/impl/old"]  # この PC に無いフォルダと、途中でない物は見ない(並列なので順は不定)
 
 
 def test_weekly_markdown():
@@ -98,7 +98,8 @@ def test_github_match_and_refresh(tmp_path):
     path = str(tmp_path / "c.json")
     assert github.attach([spec, lens, other], cfg, now=1000.0, fetch=fetch, path=path) == ""
     assert spec.github == {"repo": "o/spec-status", "url": "https://github.com/o/spec-status", "pushed_at": "2026-10-09",
-                           "release": "v0.1.0", "release_at": "2026-10-09", "ci": "失敗", "issues": 3, "branch": "main"}
+                           "release": "v0.1.0", "release_at": "2026-10-09", "ci": "失敗", "issues": 3, "branch": "main",
+                           "stars": None, "forks": None, "downloads": 0}
     assert lens.github["ci"] is None and other.github is None
     assert render.github_text(spec.github) == "v0.1.0 CI 失敗 Issue 3"
     assert "checks-status/o/spec-status/main" in render.badges(spec.github)

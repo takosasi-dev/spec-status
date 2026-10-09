@@ -21,7 +21,7 @@ TIMEOUT_S = 5
 BUDGET_S = 20           # 1回の読み込みで GitHub に使う時間の上限
 RESERVE = 5             # 残りの回数がこれ以下になったら、続きは次の読み込みに回す
 REFRESH_HOURS = 6
-CACHE_VERSION = 2       # 2: 一覧に open_issues_count を足した
+CACHE_VERSION = 3       # 2: 一覧に open_issues_count を足した。3: 星・フォーク・ダウンロード数を足した
 CI_LABEL = {"success": "成功", "failure": "失敗", "cancelled": "取消", "timed_out": "失敗"}
 
 Fetch = Callable[[str, str], tuple[int, object, bytes]]
@@ -60,11 +60,15 @@ def _norm(s: str) -> str:
 
 # 取った物は使う所だけ残して保存する
 def _trim_repos(data) -> list[dict]:
-    return [{k: r.get(k) for k in ("name", "html_url", "pushed_at", "default_branch", "open_issues_count")} for r in data]
+    keys = ("name", "html_url", "pushed_at", "default_branch", "open_issues_count", "stargazers_count", "forks_count")
+    return [{k: r.get(k) for k in keys} for r in data]
 
 
 def _trim_release(data) -> dict | None:
-    return {"tag": data[0]["tag_name"], "at": _local_day(data[0].get("published_at"))} if data else None
+    if not data:
+        return None
+    downloads = sum(a.get("download_count") or 0 for a in data[0].get("assets") or [])
+    return {"tag": data[0]["tag_name"], "at": _local_day(data[0].get("published_at")), "downloads": downloads}
 
 
 def _trim_runs(data) -> dict | None:
@@ -141,16 +145,21 @@ def info(cache: dict, owner: str, repo: dict) -> dict:
     return {"repo": f"{owner}/{repo['name']}", "url": repo.get("html_url") or "",
             "pushed_at": _local_day(repo.get("pushed_at")), "release": rel["tag"] if rel else None,
             "release_at": rel["at"] if rel else None, "ci": ci,
-            "issues": repo.get("open_issues_count"), "branch": repo.get("default_branch") or "main"}
+            "issues": repo.get("open_issues_count"), "branch": repo.get("default_branch") or "main",
+            "stars": repo.get("stargazers_count"), "forks": repo.get("forks_count"),
+            "downloads": rel.get("downloads") if rel else None}
 
 
 def _load(path: str) -> dict:
-    """保存の形(CACHE_VERSION)が違えば捨てる(304 では残した形のまま使い続けてしまうため)。"""
+    """保存の形(CACHE_VERSION)が違えば捨てる(304 では残した形のまま使い続けてしまうため)。
+    1つ前の形は中身を残して ETag だけ消す(いつもの取り直しで新しい形になる。それまで新しい欄は None)。"""
     try:
         with open(path, encoding="utf-8") as f:
             c = json.load(f)
+        if c.get("version") == CACHE_VERSION - 1:
+            return {u: {**e, "etag": ""} for u, e in c.get("urls", {}).items()}
         return c.get("urls", {}) if c.get("version") == CACHE_VERSION else {}
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return {}
 
 
@@ -164,8 +173,9 @@ def _save(path: str, cache: dict) -> None:
 
 
 def attach(statuses: list[ProjectStatus], cfg: dict, now: float | None = None,
-           fetch: Fetch = http_get, path: str | None = None) -> str:
-    """設定 [github] owner が空なら何もしない。結べたプロジェクトに ps.github を付け、止めた理由を返す。"""
+           fetch: Fetch = http_get, path: str | None = None, offline: bool = False) -> str:
+    """設定 [github] owner が空なら何もしない。結べたプロジェクトに ps.github を付け、止めた理由を返す。
+    offline なら取りに行かず、保存してある結果だけで付ける。"""
     sec = cfg.get("github", {})
     owner = (sec.get("owner") or "").strip()
     if not owner:
@@ -175,16 +185,17 @@ def attach(statuses: list[ProjectStatus], cfg: dict, now: float | None = None,
     now = time.time() if now is None else now
     hours = sec.get("refresh_hours", REFRESH_HOURS)
     list_url = f"{API}/users/{owner}/repos?per_page=100"
-    note = _refresh(cache, [(list_url, _trim_repos)], now, hours, fetch)
+    note = "" if offline else _refresh(cache, [(list_url, _trim_repos)], now, hours, fetch)
     repos = (cache.get(list_url) or {}).get("data") or []
     matched = match(statuses, repos, sec.get("repos", {}))
-    if not note:
-        jobs = []
-        for r in {r["name"]: r for r in matched.values()}.values():
-            rel_url, runs_url = _urls(owner, r)
-            jobs += [(rel_url, _trim_release), (runs_url, _trim_runs)]
-        note = _refresh(cache, jobs, now, hours, fetch)
-    _save(path, cache)
+    if not offline:
+        if not note:
+            jobs = []
+            for r in {r["name"]: r for r in matched.values()}.values():
+                rel_url, runs_url = _urls(owner, r)
+                jobs += [(rel_url, _trim_release), (runs_url, _trim_runs)]
+            note = _refresh(cache, jobs, now, hours, fetch)
+        _save(path, cache)
     for ps in statuses:
         r = matched.get(ps.project.key)
         if r:

@@ -176,3 +176,80 @@ def test_copy_text_and_history_line():
     line = G.history_line(r)
     assert line.startswith("2026-10-05T09:00:00+09:00  私  pc2  ")
     assert "状態=(消す)" in line and "フォルダを足す=L:/a" in line and line.endswith("取り消し")
+
+
+# --- v0.7.0: 新しい欄・絞り込み中の表示・記録した直後の一言・記録のフォルダの変化 ---
+
+def test_extra_details_empty_and_zero_hidden():
+    p = ps("e", "Linux/e")
+    assert G.extra_details(p) == {}
+    p.questions = {"open": 0, "mine": 0}
+    p.retreat = {"due": False, "phase": "Phase 0", "ids": ["R-1"]}
+    p.pace = {"days_per_phase": 3.0, "remaining": 0, "eta_days": 0}
+    p.eol = {"runtimes": [{"name": "python", "version": "3.12", "eol": "2028-10-31", "ended": False}], "outdated": []}
+    p.github = {"release": "v1", "stars": None, "forks": None, "downloads": None}
+    assert G.extra_details(p) == {}
+
+
+def test_extra_details_all():
+    p = ps("f", "Linux/f")
+    p.gap = "git 10/08・開発ログ 10/09 > 記録 10/05"
+    p.questions = {"open": 3, "mine": 2}
+    p.retreat = {"due": True, "phase": "Phase 0", "ids": ["R-1"]}
+    p.blocked_by = ["A", "B"]
+    p.pace = {"days_per_phase": 4.6, "remaining": 3, "eta_days": 13.8}
+    p.eol = {"runtimes": [{"name": "node", "version": "16", "eol": "2023-09-11", "ended": True}],
+             "outdated": [{"package": "x", "version": "1", "latest": "3", "behind": 2}] * 3}
+    p.github = {"stars": 12, "forks": 0, "downloads": None}
+    assert G.extra_details(p) == {
+        "gap": "git 10/08・開発ログ 10/09 > 記録 10/05",
+        "questions": "3(あなたの番 2)",
+        "retreat": "Phase 0",
+        "blocked_by": "A・B",
+        "pace": "残り 3 フェーズ ≒ 14 日",
+        "eol": "サポート切れ 1・遅れている依存 3",
+        "gh_stats": "スター 12・フォーク 0",
+    }
+    p.questions = {"open": 1, "mine": 0}
+    assert G.extra_details(p)["questions"] == "1"
+
+
+def test_extra_fields_shown_in_detail():
+    from specstatus import strings as S
+    keys = [k for k, _ in S.DETAIL_FIELDS]
+    for k, _ in S.EXTRA_FIELDS:
+        assert k in keys and k in S.DETAIL_HIDE_EMPTY
+
+
+def test_filter_summary():
+    assert G.filter_summary([], None, [], "  ") == ""
+    assert G.filter_summary(["着手済"], "Windows", ["待ち"], "") == "絞り込み中: 着手済・Windows・待ち"
+    assert G.filter_summary([], None, [], "is:脆弱") == "絞り込み中: 検索「is:脆弱」"
+    assert G.filter_summary([], None, [], "あ" * 25) == "絞り込み中: 検索「" + "あ" * 20 + "…」"
+
+
+def test_flash_text():
+    assert G.flash_text(["Alpha"], {"state": "着手済"}) == "Alphaを着手済にしました(Ctrl+Z で戻す)"
+    assert G.flash_text(["a", "b", "c"], {"state": "実装完了", "waiting": "なし"}).startswith("3 件を実装完了に")
+    assert G.flash_text(["a"], {"waiting": "確認待ち"}).startswith("aの待ちを確認待ちに")
+    assert G.flash_text(["a"], {"note": "メモ"}).startswith("aのメモを記録")
+    assert G.flash_text(["a"], {"note": None}).startswith("aのメモを消し")
+    assert G.flash_text(["a"], {"impl_add": ["L:/x"]}).startswith("aに実装フォルダを足し")
+    assert G.flash_text(["a"], {"impl_remove": ["L:/x"]}).startswith("aから実装フォルダを外し")
+    assert G.flash_text(["a"], {"done_phase": 2}).startswith("aに記録しました")
+
+
+def test_events_stamp(tmp_path):
+    d = tmp_path / "events"
+    assert G.events_stamp(str(d)) == (0.0, 0, 0)          # フォルダがまだ無い
+    d.mkdir()
+    (d / "pc.jsonl").write_bytes(b"{}\n")
+    (d / ".pc.lock").write_text("x", encoding="utf-8")    # 記録でない物は数えない
+    first = G.events_stamp(str(d))
+    assert first[1:] == (1, 3)
+    assert G.events_stamp(str(d)) == first
+    with open(d / "pc.jsonl", "ab") as f:
+        f.write(b"{}\n")
+    assert G.events_stamp(str(d)) != first                 # 時刻の細かさが粗くても大きさで分かる
+    (d / "pc2.jsonl").write_text("", encoding="utf-8")
+    assert G.events_stamp(str(d))[1] == 2

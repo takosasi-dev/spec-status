@@ -79,7 +79,7 @@ def kind_of(stem: str, kinds: list[tuple[str, re.Pattern]]) -> str | None:
 def find_docs(vault: str, cfg: dict, registry: dict):
     """戻り値: (docs, unreadable, folders_without_specs, registry_issues)。docs はパスの名前順。"""
     spec_root = nfc(slash(cfg["vault"]["spec_root"])).strip("/")
-    root_abs = os.path.join(vault, spec_root)
+    root_abs = os.path.join(vault, slash(cfg["vault"]["spec_root"]).strip("/"))    # 実際のパスは NFC にしない
     excl_dirs = [fold(slash(d)).strip("/") for d in cfg["vault"].get("exclude_dirs", [])]
     excl_files = {fold(slash(f)) for f in cfg["vault"].get("exclude_files", [])}
     excl_files |= {fold(slash(cfg["output"]["board"])), fold(slash(cfg["output"]["json"]))}
@@ -106,7 +106,8 @@ def find_docs(vault: str, cfg: dict, registry: dict):
         for fn in sorted(filenames):
             if not fn.lower().endswith(".md"):
                 continue
-            fn = nfc(fn)
+            abs_path = os.path.join(dirpath, fn)        # 実際のパスは元の名前(NFD のまま。NFC にすると開けない)
+            fn = nfc(fn)                                # NFC は比べ方と表示だけ
             vrel = f"{spec_root}/{rel_dir}/{fn}" if rel_dir else f"{spec_root}/{fn}"
             key = fold(vrel)
             if key in excl_files:
@@ -124,9 +125,8 @@ def find_docs(vault: str, cfg: dict, registry: dict):
                 kind = kind_of(stem, kinds)
             if kind is None:
                 if fold(fn) in support:
-                    docs.append(Doc(vrel, os.path.join(dirpath, fn), stem, SUPPORT_KIND, "", None, None, rel_dir))
+                    docs.append(Doc(vrel, abs_path, stem, SUPPORT_KIND, "", None, None, rel_dir))
                 continue
-            abs_path = os.path.join(dirpath, fn)
             try:
                 text = read_text(abs_path)
             except (UnicodeDecodeError, OSError) as e:

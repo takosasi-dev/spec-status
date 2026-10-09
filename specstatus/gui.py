@@ -21,6 +21,7 @@ from . import actions, cards, core, dashboard, export, history, icons, prefs, qu
 from . import guilogic as G
 from . import strings as S
 from . import theme
+from .config import events_dir
 from .model import RECORDABLE_STATES, STATES, WAITINGS, Board, ProjectStatus
 from .textutil import resolve, slash
 
@@ -50,6 +51,7 @@ class App:
         self._search_job = None
         self.prefs = prefs.load()                    # 前回の窓の大きさ・絞り込み・表示など
         self.bodies: dict[str, str] = {}            # project.key -> 仕様書の本文(検索の素の語に使う)
+        self.events_stamp = None                    # 最後に読んだときの記録のフォルダ(guilogic.events_stamp)
         self._build()
         self._restore_prefs()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -104,6 +106,7 @@ class App:
         self.update_btn = ttk.Button(head, text=S.UPDATE_BUTTON, command=self.do_update, style="Accent.TButton")
         self.update_lbl = ttk.Label(head, text="", style="Muted.TLabel")
         self.release: dict | None = None
+        self.gen_text = ""                          # 帯の「読み込み: 時刻 (PC)」。一言を出した後はここに戻す
         self.gen_lbl = ttk.Label(head, text="", style="Muted.TLabel")
         self.gen_lbl.pack(side="right", padx=px(8))
 
@@ -151,6 +154,7 @@ class App:
         self.search_var.trace_add("write", lambda *_: self._on_search())
         self.search = ttk.Entry(tools, textvariable=self.search_var, width=30)
         self.search.pack(side="left", padx=(px(6), px(14)))
+        self.search.bind("<Escape>", lambda e: (self.search_var.set(""), self._focus_view(), "break")[2])
         tooltip.TreeTooltip(self.search, lambda e: S.SEARCH_TIP, self)
         ttk.Label(tools, text=S.FILTER_LABEL, style="Muted.TLabel").pack(side="left")
         self.waiting_var, self.conflict_var = tk.BooleanVar(), tk.BooleanVar()
@@ -163,6 +167,12 @@ class App:
             ttk.Checkbutton(tools, text=text, variable=var, command=self.refresh_table).pack(side="left", padx=px(4))
         self.count_lbl = ttk.Label(tools, text="", style="Muted.TLabel")
         self.count_lbl.pack(side="right")
+        # 件数の横の「絞り込み中: …[×]」(何も絞っていなければ隠す)
+        self.filter_box = ttk.Frame(tools)
+        self.filter_lbl = ttk.Label(self.filter_box, text="", style="Muted.TLabel")
+        self.filter_lbl.pack(side="left")
+        ttk.Button(self.filter_box, text=S.FILTER_X, width=2, command=self.clear_filters,
+                   takefocus=False).pack(side="left", padx=(px(4), 0))
         # 表示の切り替え(表・カード・概要)
         self.view_var = tk.StringVar(value="table")
         views = ttk.Frame(tools)
@@ -242,6 +252,11 @@ class App:
         r.bind_all("<F5>", lambda e: self.reload())
         r.bind_all("<Control-z>", lambda e: (self.undo(), "break")[1])
         r.bind_all("<Control-MouseWheel>", lambda e: (self.change_font(1 if e.delta > 0 else -1), "break")[1])
+        for n, (key, _) in enumerate(S.VIEWS, 1):          # Ctrl+1/2/3 で表・カード・概要
+            r.bind_all(f"<Control-Key-{n}>", lambda e, k=key: (self.view_var.set(k), self._show_view(), "break")[2])
+        r.bind_all("<F6>", lambda e: (self._cycle_focus(), "break")[1])
+        self.e_note.bind("<Return>", lambda e: (self.record(), "break")[1])
+        r.bind("<FocusIn>", lambda e: self._reload_if_changed())
         actions.bind_keys(self)
 
     # ---------- 表の列・右クリック・ツールチップ ----------
@@ -361,9 +376,9 @@ class App:
         self.copy_flash(S.EXPORT_DONE.format(path=os.path.basename(path)))
 
     def copy_flash(self, text: str) -> None:
-        before = self.gen_lbl.cget("text")
+        """見出しの帯に一言を3秒出して、読み込みの時刻(gen_text)に戻す。後から別の一言が出ていたら、そちらに任せる。"""
         self.gen_lbl.configure(text=text)
-        self.root.after(3000, lambda: self.gen_lbl.configure(text=before))
+        self.root.after(3000, lambda: self.gen_lbl.cget("text") == text and self.gen_lbl.configure(text=self.gen_text))
 
     # ---------- 表示の切り替えと、前回の状態 ----------
     def _show_view(self) -> None:
@@ -583,13 +598,15 @@ class App:
         self._update_edit()
 
     # ---------- 読み込み ----------
-    def reload(self) -> None:
+    def reload(self, offline: bool = False) -> None:
+        """offline: GitHub・OSV などに行かずキャッシュだけ使う(窓に戻ったときの読み直し。1時間60回の上限を守る)。"""
         if self.busy:
             return
         sizes = (self.px(18), self.px(32), self.px(40))     # 行・詳細・カード
 
         def work():
-            board = self.core.load(self.vault, self.config_path)
+            self.events_stamp = G.events_stamp(events_dir(self.vault))     # 読む前に取る(読む間に増えたら次に戻ったとき読み直す)
+            board = self.core.load(self.vault, self.config_path, offline=offline)
             try:
                 self.icon_paths = icons.find_all(board.statuses, sizes)
             except Exception:       # アイコンが取れなくても一覧は出す
@@ -629,7 +646,8 @@ class App:
         self.error.grid_remove()
         self.table.grid()
         self.board_btn.configure(state="normal")
-        self.gen_lbl.configure(text=S.GENERATED.format(at=datetime.now().strftime("%Y-%m-%d %H:%M"), pc=board.pc_name))
+        self.gen_text = S.GENERATED.format(at=datetime.now().strftime("%Y-%m-%d %H:%M"), pc=board.pc_name)
+        self.gen_lbl.configure(text=self.gen_text)
         for b in self.chips.values():
             b.configure(state="normal")
         self._refresh_side()
@@ -676,8 +694,8 @@ class App:
 
         def work():
             if do_vault:
-                update.update_vault(self.vault, rel["tag"])
-            return update.stage_exe(rel.get("exe_zip"), st["exe"]) if do_exe else None
+                update.update_vault(self.vault, rel["tag"], zip_url=rel.get("vault_zip"), sums=rel.get("sums"))
+            return update.stage_exe(rel.get("exe_zip"), st["exe"], sums=rel.get("sums")) if do_exe else None
 
         def finished(staged, err):
             self._set_busy(False)
@@ -747,6 +765,16 @@ class App:
             mark = (S.SORT_DESC if self.sort[1] else S.SORT_ASC) if self.sort and self.sort[0] == k else ""
             self.tree.heading("#0" if k == "name" else k, text=title + mark)
         self.count_lbl.configure(text=S.ROW_COUNT.format(n=len(rows), total=len(self.board.statuses)))
+        checks = [t for t, v in ((S.WAITING_ONLY, self.waiting_var), (S.CONFLICT_ONLY, self.conflict_var),
+                                 (S.STALE_ONLY, self.stale_var), (S.CHANGED_ONLY, self.changed_var),
+                                 (S.VULN_ONLY, self.vuln_var)) if v.get()]
+        filtering = G.filter_summary([s for s in STATES if self.chip_vars[s].get()], self.category, checks,
+                                     self.search_var.get())
+        self.filter_lbl.configure(text=filtering)
+        if filtering:
+            self.filter_box.pack(side="right", padx=(0, self.px(8)), after=self.count_lbl)
+        else:
+            self.filter_box.pack_forget()
         if rows:
             self.empty.place_forget()
         else:
@@ -940,7 +968,8 @@ class App:
         info = {"source": G.source_text(ps), "where": ps.decided_by.get("path") or "-",
                 "spec_dir": ps.project.spec_dir, "phase": G.phase_text(ps), "waiting": ps.waiting,
                 "note": ps.folded.note or "-", "activity": G.activity_text(ps), "github": G.github_detail(ps),
-                "changed": G.changed_text(ps), "ac": G.ac_detail(ps), "vulns": G.vulns_text(ps)}
+                "changed": G.changed_text(ps), "ac": G.ac_detail(ps), "vulns": G.vulns_text(ps),
+                **{k: "-" for k, _ in S.EXTRA_FIELDS}, **G.extra_details(ps)}
         self.d_github_url = (ps.github or {}).get("url") or ""
         self.d_info["github"].configure(cursor="hand2" if self.d_github_url else "")
         for k, v in self.d_info.items():
@@ -1022,9 +1051,7 @@ class App:
     def copy_text(self, text: str, name: str = "") -> None:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        before = self.gen_lbl.cget("text")
-        self.gen_lbl.configure(text=S.COPIED.format(name=name or text.splitlines()[0][:30]))
-        self.root.after(3000, lambda: self.gen_lbl.configure(text=before))
+        self.copy_flash(S.COPIED.format(name=name or text.splitlines()[0][:30]))
 
     def icon(self, key: str, size: int) -> tk.PhotoImage | None:
         return self._icon(key, size)
@@ -1079,6 +1106,43 @@ class App:
     def focus_note(self) -> None:
         if len(self.selected()) == 1:
             self.e_note.focus_set()
+
+    def _view_widget(self) -> tk.Misc:
+        return {"cards": self.cards, "dashboard": self.dash}.get(self.view_var.get(), self.tree)
+
+    def _focus_tree(self, tree: ttk.Treeview) -> None:
+        """矢印キーがすぐ効くよう、選んでいる行(無ければ先頭)に Treeview のフォーカスを置く。"""
+        tree.focus_set()
+        sel, kids = tree.selection(), tree.get_children()
+        if not tree.focus() and (sel or kids):
+            tree.focus(sel[0] if sel else kids[0])
+
+    def _focus_view(self) -> None:
+        w = self._view_widget()
+        self._focus_tree(w) if w is self.tree else w.focus_set()
+
+    def _cycle_focus(self) -> None:
+        """F6: 分類 → 表(カード・概要)→ 詳細 → 分類 … と移る。"""
+        order = [self.side, self._view_widget(), self.d_tabs]
+        try:
+            cur = str(self.root.focus_get() or "")
+        except (KeyError, tk.TclError):         # ttk.Combobox の一覧などで起きる
+            cur = ""
+        i = next((n for n, w in enumerate(order) if cur == str(w) or cur.startswith(str(w) + ".")), -1)
+        nxt = order[(i + 1) % len(order)]
+        if nxt is self.side:
+            self._focus_tree(self.side)
+        elif nxt is self.d_tabs:
+            nxt.focus_set()
+        else:
+            self._focus_view()
+
+    def _reload_if_changed(self) -> None:
+        """窓に戻ったとき: 記録のフォルダが前回の読み込みから変わっていれば(ほかの PC・CLI の記録)読み直す。"""
+        if self.busy or self.events_stamp is None:
+            return
+        if G.events_stamp(events_dir(self.vault)) != self.events_stamp:
+            self.reload(offline=True)
 
     # ---------- 記録 ----------
     def record(self) -> None:
@@ -1141,7 +1205,9 @@ class App:
                     fail = (code, reason)
                     break
                 done.append((ps.project.key, back))
-            built = core.build(self.vault, self.config_path) if done else None
+            if done:        # 自分で書いた分で、窓に戻ったときに読み直さないように
+                self.events_stamp = G.events_stamp(events_dir(self.vault))
+            built = core.build(self.vault, self.config_path, offline=True) if done else None   # 記録の後はネットに行かない
             return done, fail, built
 
         def finished(res, err):
@@ -1171,6 +1237,9 @@ class App:
                 return
             self.build_warn = msg if code == 3 else ""
             self._apply_board(new_board)
+            if done:
+                self.copy_flash(G.flash_text([ps.project.name for ps, _, _ in plan[:len(done)]], plan[0][1])
+                                if push_undo else S.FLASH_UNDONE)
 
         self._run(work, finished)
 

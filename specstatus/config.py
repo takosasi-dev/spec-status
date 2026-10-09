@@ -53,6 +53,30 @@ def pc_name(cfg: dict) -> str:
     return (cfg.get("pc", {}).get("name") or "").strip() or platform.node()
 
 
+def pc_name_conflicts(vault: str) -> list[str]:
+    """data\\config\\*.toml の [pc] name が2つ以上のファイルで同じなら、その知らせ。空の name はかぶりの対象外。
+    記録ファイルは PC 名ごとなので、かぶると同期で互いの記録を上書きして消す。読めないファイルは飛ばす。"""
+    folder = os.path.join(data_dir(vault), "config")
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.lower().endswith(".toml"))
+    except OSError:
+        return []
+    by_name: dict[str, list[str]] = {}
+    shown: dict[str, str] = {}
+    for fn in names:
+        try:
+            name = _load_toml(os.path.join(folder, fn)).get("pc", {}).get("name") or ""
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):
+            continue
+        name = name.strip() if isinstance(name, str) else ""
+        if name:
+            k = name.casefold()                         # 記録ファイルの名前になるので、大文字小文字の違いもかぶり
+            by_name.setdefault(k, []).append(fn)
+            shown.setdefault(k, name)
+    return [f"PC 名 {shown[k]} が {' と '.join(fs)} でかぶっています。記録が同期で消えます"
+            for k, fs in by_name.items() if len(fs) > 1]
+
+
 def load_registry(vault: str) -> dict:
     """data\\registry.toml(無ければ空)。"""
     path = os.path.join(data_dir(vault), "registry.toml")

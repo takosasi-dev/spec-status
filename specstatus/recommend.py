@@ -1,4 +1,5 @@
-# 今日手を付けるとよい物を点数で選ぶ(待ち・脆弱な依存・仕様の変更・止まり・一部未実装・AC の進み・食い違い)。
+# 今日手を付けるとよい物を点数で選ぶ(待ち・脆弱な依存・仕様の変更・止まり・一部未実装・AC の進み・食い違い・
+# 記録漏れ・撤退の判定・回答待ち。前提が未完なら下げる)。
 # 一覧ノートの「## 今日のおすすめ」の行も作る。点の重みは下の定数(仮決め)。
 from __future__ import annotations
 
@@ -19,6 +20,12 @@ W_STALE_MAX = 30
 W_PARTIAL = 15              # 一部未実装
 W_AC_PROGRESS = 20          # 着手済で AC が進んでいる(済の割合を掛ける)
 W_CONFLICT = 10
+W_GAP = 15                  # 記録漏れかも(最後の記録の後に git・開発ログ)
+W_RETREAT_DUE = 25          # 撤退の判定の時期に来た
+W_QUESTION_MINE_EACH = 5    # 回答者が「私」の未確定事項1つごと
+W_QUESTION_MINE_MAX = 25
+W_BLOCKED = -30             # 前提の仕様書が終わっていない(下げる)
+QUESTION_STATES = ("着手済", "一部未実装")   # 回答待ちを点にする状態(未着手まで入れると大半に付いてうるさい)
 SKIP_STATES = ("撤退", "証拠なし")
 SEPARATOR = "・"
 EXPLAIN = "待ち・脆弱な依存・仕様の変更・止まっている日数などを点にして、高い順に並べた物。"
@@ -57,6 +64,19 @@ def score(ps: ProjectStatus, today: date) -> tuple[int, list[str]]:
     if ps.conflict:
         pts += W_CONFLICT
         why.append("食い違い")
+    if ps.gap:
+        pts += W_GAP
+        why.append("記録漏れかも")
+    if (ps.retreat or {}).get("due"):
+        pts += W_RETREAT_DUE
+        why.append("撤退の判定の時期")
+    mine = (ps.questions or {}).get("mine", 0)
+    if mine and ps.state in QUESTION_STATES:
+        pts += min(mine * W_QUESTION_MINE_EACH, W_QUESTION_MINE_MAX)
+        why.append(f"あなたの回答待ち {mine}")
+    if ps.blocked_by and pts > 0:
+        pts = max(pts + W_BLOCKED, 1)
+        why.append("前提が未完: " + SEPARATOR.join(ps.blocked_by))
     return pts, why
 
 

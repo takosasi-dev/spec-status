@@ -22,6 +22,21 @@ STALE_ONLY = "止まり"
 CHANGED_ONLY = "仕様変更"
 VULN_ONLY = "脆弱性"
 VIEWS = (("table", "表"), ("cards", "カード"), ("dashboard", "概要"))
+FILTERING = "絞り込み中: {items}"      # 件数の横。何も絞っていなければ出さない
+FILTER_SEARCH = "検索「{q}」"
+FILTER_X = "×"
+
+# 記録した直後の一言(見出しの帯に数秒)
+FLASH_MANY = "{n} 件"
+FLASH_STATE = "{who}を{state}にしました"
+FLASH_WAITING = "{who}の待ちを{waiting}にしました"
+FLASH_NOTE = "{who}のメモを記録しました"
+FLASH_NOTE_CLEARED = "{who}のメモを消しました"
+FLASH_IMPL_ADD = "{who}に実装フォルダを足しました"
+FLASH_IMPL_REMOVE = "{who}から実装フォルダを外しました"
+FLASH_OTHER = "{who}に記録しました"
+FLASH_UNDO_HINT = "(Ctrl+Z で戻す)"
+FLASH_UNDONE = "取り消しました"
 
 # 表示と書き出しのメニュー
 MENU = "表示"
@@ -83,20 +98,47 @@ from .render import BY_LABEL as BY_LABELS, SOURCE_LABEL as SOURCE_LABELS  # noqa
 # 右の詳細
 DETAIL_NONE = "1件選ぶと詳細を出します"
 DETAIL_MULTI = "{n} 件を選んでいます"
+# v0.7.0 の欄(キー → 見出し)。詳細とツールチップに、値がある物だけ出す(guilogic.extra_details)
+EXTRA_FIELDS = (
+    ("pace", "見込み"),
+    ("gap", "記録漏れ?"),
+    ("questions", "未確定"),
+    ("retreat", "撤退の判定の時期"),
+    ("blocked_by", "前提が未完"),
+    ("eol", "依存の古さ"),
+    ("gh_stats", "GitHub の反響"),
+)
+_EXTRA = dict(EXTRA_FIELDS)
 DETAIL_FIELDS = (          # 詳細の表(キー → 見出し)
     ("source", "根拠"),
     ("where", "場所"),
     ("spec_dir", "仕様書フォルダ"),
     ("phase", "Phase"),
+    ("pace", _EXTRA["pace"]),
     ("waiting", "待ち"),
     ("note", "メモ"),
+    ("gap", _EXTRA["gap"]),
+    ("questions", _EXTRA["questions"]),
+    ("retreat", _EXTRA["retreat"]),
+    ("blocked_by", _EXTRA["blocked_by"]),
     ("activity", "最後に動いた日"),
     ("changed", "仕様書の更新"),
     ("ac", "受け入れ基準"),
     ("vulns", "依存の脆弱性"),
+    ("eol", _EXTRA["eol"]),
     ("github", "GitHub"),
+    ("gh_stats", _EXTRA["gh_stats"]),
 )
-DETAIL_HIDE_EMPTY = ("activity", "changed", "ac", "vulns", "github")    # 値が無ければ行ごと隠す
+DETAIL_HIDE_EMPTY = ("activity", "changed", "ac", "vulns", "github", *_EXTRA)    # 値が無ければ行ごと隠す
+QUESTIONS_TEXT = "{open}"
+QUESTIONS_MINE = "(あなたの番 {mine})"
+BLOCKED_SEP = "・"
+PACE_TEXT = "残り {remaining} フェーズ ≒ {days} 日"
+EOL_ENDED = "サポート切れ {n}"
+EOL_OUTDATED = "遅れている依存 {n}"
+GH_STARS = "スター {n}"
+GH_FORKS = "フォーク {n}"
+GH_DOWNLOADS = "ダウンロード {n}"
 CHANGED_TEXT = "{date}(最後の記録より後)"
 AC_TEXT = "{done} / {total} にチェック"
 VULNS_TEXT = "{count} / {total} 件(例: {packages})"

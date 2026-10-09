@@ -34,6 +34,22 @@ def test_full():
     ]
 
 
+def test_v070_fields():
+    p = ps("c", "Linux/c")
+    p.gap = "git 10/08 > 記録 10/05"
+    p.questions = {"open": 3, "mine": 2}
+    p.retreat = {"due": True, "phase": "Phase 2 の後", "ids": []}
+    p.blocked_by = ["A"]
+    p.github = {"release": None, "stars": 5, "forks": None, "downloads": 40}
+    assert tooltip_text(p).split("\n")[2:] == [
+        "記録漏れ?: git 10/08 > 記録 10/05",
+        "未確定: 3(あなたの番 2)",
+        "撤退の判定の時期: Phase 2 の後",
+        "前提が未完: A",
+        "GitHub の反響: スター 5・ダウンロード 40",
+    ]
+
+
 def test_zero_vulns_and_no_release_hidden():
     p = ps("b", "Linux/b")
     p.vulns = {"count": 0, "total": 4, "packages": []}

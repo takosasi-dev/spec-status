@@ -30,7 +30,11 @@ def main() -> int:
         vault = _ask_vault()            # Release の zip には vault.txt が無いので、初回に選んでもらう
         if not vault:
             return 2
-    from specstatus import gui
+    from specstatus import gui, update
+    try:
+        update.cleanup_old(update.exe_dir())      # 入れ替えの後に無事に起動できたので、前の版の .old を消す
+    except OSError:
+        pass
     return gui.run(vault, a.config)
 
 

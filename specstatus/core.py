@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib
 import os
+import tempfile
 import time
 from datetime import date, datetime, timedelta
 
-from . import github, history, osv, records, snapshots
-from .config import ConfigError, events_dir, load_config, load_registry, pc_name
+from . import deps, eol, gaps, github, history, osv, pace, records, snapshots, specinfo
+from .config import ConfigError, events_dir, load_config, load_registry, pc_name, pc_name_conflicts
 from .decide import decide
 from .find import find_docs
 from .group import group_docs
@@ -88,7 +89,8 @@ def _bind_records(recs: list[Record], projects: list[Project], registry: dict):
     return bound, orphans, issues
 
 
-def load(vault: str, config_path: str | None) -> Board:
+def load(vault: str, config_path: str | None, offline: bool = False) -> Board:
+    """offline なら GitHub と OSV.dev に行かず、残してある結果だけを使う(記録の後の読み直しを速くする)。"""
     vault = os.path.abspath(vault)
     cfg = load_config(vault, config_path)
     registry = load_registry(vault)
@@ -106,20 +108,25 @@ def load(vault: str, config_path: str | None) -> Board:
     statuses.sort(key=board_order)
     history.mark_stale(statuses, date.today(), cfg.get("board", {}).get("stale_days", STALE_DAYS))
     history.mark_spec_changed(statuses)
+    specinfo.mark(statuses)          # 未確定事項・撤退基準(仕様書を読むだけ)
+    deps.mark(statuses)              # 前提の仕様書(状態が決まった後)
+    gaps.mark(statuses)              # 記録漏れかも(開発ログの日と実装フォルダの git)
     try:
         snapshots.ensure_baseline(statuses)
     except OSError:
         pass
-    github_note = github.attach(statuses, cfg)
-    osv_note = osv.attach(statuses, cfg)
+    github_note = github.attach(statuses, cfg, offline=offline)
+    osv_note = osv.attach(statuses, cfg, offline=offline)
+    eol_note = eol.attach(statuses, cfg, offline=offline)
+    pace.mark(statuses, date.today())
     os_dirs = sorted((n for n in os.listdir(spec_root) if os.path.isdir(os.path.join(spec_root, n))), key=fold)
     board = Board(
         vault=vault, pc_name=pc_name(cfg), config=cfg, docs=docs, statuses=statuses,
         unreadable=unreadable + ev_unreadable, skipped_evidence=skipped,
         record_problems=problems, orphans=orphans, folders_without_specs=no_spec,
-        registry_issues=issues + merge_issues + rename_issues, record_count=len(recs),
+        registry_issues=issues + merge_issues + rename_issues + pc_name_conflicts(vault), record_count=len(recs),
         os_dirs=[nfc(n) for n in os_dirs], reader_failed=bool(ev_unreadable), github_note=github_note,
-        osv_note=osv_note,
+        osv_note=osv_note, eol_note=eol_note,
     )
     output_paths(board)          # 出力先が許可外なら GUI のエラー表示にも出るよう、読む段で止める
     return board
@@ -283,17 +290,28 @@ def _dup_stems(vault: str) -> set[str]:
 
 
 def _replace(path: str, text: str) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    for i in range(REPLACE_TRIES):
+    """一時ファイル(名前は一意。GUI と CLI が同時に書いてもぶつからない)に書き、ディスクに落としてから差し替える。
+    失敗したら一時ファイルを消す(vault に .tmp を残さない)。"""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        for i in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError:
+                if i == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(REPLACE_WAIT_S)
+    except BaseException:
         try:
-            os.replace(tmp, path)
-            return
+            os.remove(tmp)
         except OSError:
-            if i == REPLACE_TRIES - 1:
-                raise
-            time.sleep(REPLACE_WAIT_S)
+            pass
+        raise
 
 
 def output_paths(board: Board) -> tuple[str, str]:
@@ -317,9 +335,9 @@ def write_outputs(board: Board, now: datetime | None = None) -> None:
     _replace(json_path, js)
 
 
-def build(vault: str, config_path: str | None) -> tuple[int, str, Board | None]:
+def build(vault: str, config_path: str | None, offline: bool = False) -> tuple[int, str, Board | None]:
     try:
-        board = load(vault, config_path)
+        board = load(vault, config_path, offline=offline)
         write_outputs(board)
     except ConfigError as e:
         return 2, str(e), None

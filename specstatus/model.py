@@ -146,6 +146,13 @@ class ProjectStatus:
     stale_days: int | None = None       # 止まっている物なら、最後に動いてからの日数
     spec_changed: str | None = None     # 実装完了・一部未実装の最後の記録より後に仕様書が書き換えられた日(YYYY-MM-DD)
     vulns: dict | None = None           # osv.attach が付ける {count, total, packages, ids, lockfiles}
+    # v0.7.0(INTERFACES §7)
+    gap: str | None = None              # gaps.mark: 最後の記録より後に動いた跡(git・開発ログ)の一言。無ければ None
+    questions: dict | None = None       # specinfo.mark: 未確定事項 {"open": 未回答の数, "mine": そのうち回答者が「私」の数}
+    retreat: dict | None = None         # specinfo.mark: 撤退基準 {"due": 判定の時期に来たか, "phase": 判定の期日の文字, "ids": ["R-1", ...]}
+    blocked_by: list[str] = field(default_factory=list)   # deps.mark: 前提の仕様書のうち終わっていない物の名前
+    pace: dict | None = None            # pace.mark: {"days_per_phase": 小数, "remaining": 残りのフェーズ数, "eta_days": 見込みの日数}
+    eol: dict | None = None             # eol.attach: {"runtimes": [{"name","version","eol","ended"}], "outdated": [{"package","version","latest","behind"}]}
 
     @property
     def conflict(self) -> bool:
@@ -188,3 +195,4 @@ class Board:
     reader_failed: bool = False         # 読み手のどれかが例外で落ちた(終了コード 3)
     github_note: str = ""               # GitHub を取りに行けなかった等の一言(終了コードには響かない)
     osv_note: str = ""                  # OSV.dev を取りに行けなかった等の一言(同上)
+    eol_note: str = ""                  # endoflife.date などを取りに行けなかった等の一言(同上)

@@ -69,5 +69,14 @@ repos = {}
 enabled = false                                  # true で、実装フォルダの依存の既知の脆弱性を OSV.dev(登録不要・無料)で調べる
 refresh_hours = 24                               # 依存ごとに、これより古い結果だけ聞き直す
 
+[eol]
+enabled = false                                  # true で、実装のランタイム(Python・Node など)のサポート期限と依存の遅れを調べる(endoflife.date・PyPI・npm。登録不要・無料)
+refresh_hours = 24                               # 名前ごとに、これより古い結果だけ聞き直す
+max_queries = 60                                 # 1回の読み込みで聞く数の上限
+warn_days = 90                                   # サポート期限がこの日数以内に来る物も出す
+
+[schedule]
+weekly = true                                    # 週のまとめの予定を登録するか。2台で使うときは片方を false にする(同じ週報を同時に書かないため)
+
 [gui]
 copy_template = "次の仕様書を実装して。着手する前に SpecStatus の show で状態を確かめること。\n仕様書: {abs_path}"

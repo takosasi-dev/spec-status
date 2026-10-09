@@ -119,3 +119,62 @@ def where(board: Board, folder: str) -> list[ProjectStatus]
 - `specstatus/query.py`: 検索の書き方。`parse(text) -> Query`、`match(ps, q, body: str | None = None) -> bool`。`state:着手済`(`状態:`)・`waiting:確認待ち`(`待ち:`)・`cat:Windows`(`分類:`)・`is:vuln`/`is:stale`/`is:changed`/`is:conflict`(日本語 `is:脆弱`/`is:止まり`/`is:変更`/`is:食い違い` も)・`has:github`/`has:note`・`-語`(含まない)・`"空白を含む語"`。素の語は名前・仕様書フォルダ・メモ・実装フォルダのパス・(body があれば)仕様書の本文に当てる。大文字小文字・全角半角は `textutil.fold`。
 - `specstatus/export.py`: `to_csv(rows) -> str`(列は表と同じ+メモ・AC・脆弱性。書く側で utf-8-sig)、`capture_png(widget, path)`(Windows の PrintWindow で部品の範囲を撮って `pngutil.encode` で書く)。
 - テスト: `tests/test_prefs.py`・`tests/test_query.py`・`tests/test_export.py`・`tests/test_tooltip.py`(純関数だけ)。
+
+
+## 7. v0.7.0 の並列作業(2026-10-09)
+
+依頼者が選んだ 16 件を、担当 1〜5 が同じ作業フォルダで並列に作る。担当どうしでファイルが重ならないように分けた。
+
+共通の決まり(1〜6 章に加えて)
+- **既存のファイルは、各担当の「触ってよい」に書いた物だけ直す。** `model.py`(§7 の欄は本体が足し済み)・`render.py`・`cli.py`・`dashboard.py`・`cards.py`・README は本体(統合役)だけが直す。新しいモジュールの関数は本体が `core.load`・一覧ノート・JSON・CLI に配線する。
+- 標準ライブラリだけ。通信・git・PowerShell・schtasks・時刻・ファイルの更新時刻は引数で差し替えられるようにし、テストで本物を呼ばない。窓を出すテストは書かない。`python -m pytest -q` が全部通ること(他の担当の作りかけで落ちたら、自分の分だけ通ることを確かめて報告する)。
+- 保存は `%LOCALAPPDATA%\SpecStatus\` の下(vault には書かない)。場所は引数 `folder` で差し替えられるように。
+- 仕様書・説明書・tools.toml・引き継ぎメモ・HandoffStub の設定・registry.toml は読むだけ(書かない)。
+- `ProjectStatus` に足した欄(model.py の「v0.7.0」の所): `gap`・`questions`・`retreat`・`blocked_by`・`pace`・`eol`。形はそこのコメントのとおり。`github` の dict には担当 5 が `stars`・`forks`・`downloads` を足す。
+- テストで ProjectStatus を作るときは `tests/test_guilogic.py` の `ps()` と `rec()` を使う。
+- 画面・一覧ノートの文言は日本語。依頼者向けの文は短く、専門語を避ける。
+- git の commit はしない(本体がまとめてする)。
+
+### 担当 1: 壊れにくさ(小さな直し)と速さ
+触ってよい: `config.py`・`find.py`・`core.py`・`history.py`・`records.py`・`osv.py`・それぞれのテスト(新しく `tests/test_robust.py` を作ってよい)。
+- PC 名のかぶり: `data/config/*.toml` の `[pc] name`(空なら platform.node() にはしない。空はかぶりの対象外)が2つ以上のファイルで同じなら、`core.load` で `registry_issues` に「PC 名 X が a.toml と b.toml でかぶっています。記録が同期で消えます」を足す。関数は `config.pc_name_conflicts(vault) -> list[str]`。
+- NFD の名前: `find.py` で NFC にした名前で実際のパスを作っている所を直す(実際のパスは元の名前、NFC は比べ方と表示だけ)。`snapshots.py` は担当 1 が触ってよい(同じ直しが要るなら)。NFD の名前のテストを足す。
+- `core._replace`: 一時ファイルを `tempfile.mkstemp(dir=…)` で一意の名前にし、flush と `os.fsync` の後に `os.replace`。失敗したら一時ファイルを消す。
+- 速さ: `history` で実装フォルダごとの `git log` を `concurrent.futures.ThreadPoolExecutor` でまとめて走らせる(結果は同じ)。`core.load(vault, config_path, offline=False)` と `core.build(vault, config_path, offline=False)` に `offline` を足し、offline なら GitHub と OSV に行かない(`github.attach(..., offline=True)`・`osv.attach(..., offline=True)` でキャッシュだけ使う。`github.py` の `offline` は担当 5 が足すので、core からは keyword で渡すだけ。osv.py の offline は担当 1 が足す)。GUI が記録の後に呼ぶ build を offline にするのは本体が配線する。
+- テスト: かぶりの検出・NFD・_replace の一時ファイルが残らない・git の並列で結果が変わらない・offline で fetch が呼ばれない。
+
+### 担当 2: ソフト内の更新と予定
+触ってよい: `update.py`・`schedule.py`・`tools/release.py`・`tests/test_update.py`・`tests/test_schedule.py`。
+- exe の入れ替え(`swap_script`): 全体を try/finally で包み、入れ替えに成功しても失敗しても、何かの exe(成功なら新、失敗なら元)を必ず起動する。結果を `%LOCALAPPDATA%\SpecStatus\update.log` に1行ずつ足す。`.old` はその場で消さず、次に無事に起動したときに消す: `update.cleanup_old(folder) -> bool`(本体が GUI の起動時に呼ぶ)。`Wait-Process` が時間切れなら入れ替えずに元を起動する。
+- vault 側の更新(`update_vault`): パッケージと FILES の両方を先に `.old` に退避してから入れ替え、途中で失敗したら全部元に戻す。
+- 改ざんの確認: `tools/release.py` が Release に `SHA256SUMS.txt`(`<sha256>  <ファイル名>` の行)を付ける。`update` はそれがあれば zip を照合し、合わなければ UpdateError。無い古い Release では照合せずに進む(戻り値かログで「照合なし」と分かるように)。
+- 予定: `schtasks /Create /XML` で登録し、`StartWhenAvailable`(時刻に寝ていたら起きた時に動く)を付ける。XML は UTF-16 で一時ファイルに書いて渡す。週のまとめを2台が同時に書かないよう、設定 `[schedule] weekly = true`(既定 true)が false の PC では週のまとめを登録しない(config.example.toml への追記は本体がする。値は `cfg.get("schedule", {}).get("weekly", True)`)。
+- 朝の知らせ: 今の状態を `notify.json` に保存するのは、通知が成功した後にする(失敗したら保存しない)。
+- テスト: runner・fetch を差し替えて、上のそれぞれ。
+
+### 担当 3: GUI の使い勝手と新しい欄の表示
+触ってよい: `gui.py`・`guilogic.py`・`actions.py`・`strings.py`・`tooltip.py`・`prefs.py`・それぞれのテスト。
+- 記録した直後の一言: 1〜5・W・メモなどで記録したら「○○を着手済にしました(Ctrl+Z で戻す)」を数秒出す。今ある `copy_flash` を使い回す。複数件なら「3件を…」。
+- 絞り込み中を常に見せる: 件数の横に「絞り込み中: 確認待ち・Windows [×]」。[×] で今ある `clear_filters`。何も絞っていなければ出さない。
+- 窓に戻ったら自動で読み直す: root の `<FocusIn>` で `data/events/*.jsonl` の最新の更新日時(と件数)を前回と比べ、変わっていれば今ある `reload()`。読み込み中・書き込み中は飛ばす。
+- キー操作: 検索欄の Esc で中身を消して表に戻す、メモ欄の Enter で記録、Ctrl+1/2/3 で表・カード・概要、F6 で分類→表→詳細と移る。`?` の一覧に Ctrl+F・F5・Ctrl+Z・Ctrl+ホイール・今回のキーを載せる。
+- 新しい欄の表示: 詳細の欄と、ツールチップ(`tooltip.tooltip_text`)に、値がある物だけ1行ずつ出す。`gap`(「記録漏れ?: …」)・`questions`(「未確定 3(あなたの番 2)」)・`retreat`(due なら「撤退の判定の時期: Phase 0」)・`blocked_by`(「前提が未完: A・B」)・`pace`(「見込み: 残り 3 フェーズ ≒ 14 日」)・`eol`(サポート切れ・遅れている依存の数)・`github` の `stars`/`forks`/`downloads`(あれば)。文字を作る関数は guilogic に純関数で置いてテストする。
+- 右クリックに「再開用の指示文をコピー」: `from . import resume` を try で import し、あれば `resume.prompt(ps)` の文を `app.copy_text`。担当 4 が並行で作るので、import できなければ項目を出さない。
+- GUI の build を offline にする配線は本体がする(触らない)。
+
+### 担当 4: 仕様書と記録の読み解き(記録漏れ・再開の文・未確定事項・撤退判定・依存)
+触ってよい: 新しい `gaps.py`・`resume.py`・`specinfo.py`・`deps.py`、`recommend.py`、それぞれのテスト。
+- `gaps.py`: `mark(statuses, git_date=history.git_last_date) -> None`。実装フォルダの git の最後のコミットの日か開発ログの最後の日(`ps.last_devlog_date`)が、最後の記録(`ps.folded.last_record` の日。時刻はローカルの日に直す)より**日単位で後**なら `ps.gap` に「git 10/08・開発ログ 10/09 > 記録 10/05」のような一言。記録が無い物・撤退・証拠なしは対象外。`git_date` は担当 1 が並列にしても同じ形で呼べるように引数で受ける(`history.impl_dirs(ps)` で実装フォルダ)。`section(statuses, link) -> list[str]`(一覧ノートの「## 記録漏れかも(n)」の表。無ければ [])。
+- `resume.py`: `prompt(ps, max_lines=40) -> str`。Claude Code に貼る再開の指示: 仕様書の絶対パス、状態・待ち・最後のメモ、次のフェーズ(`done_phase+1` の見出しの行と中身の数行。仕様書の「実装フェーズ」の節から)、未チェックの受け入れ基準の行(`- [ ] AC-n` を上限まで)、未回答の未確定事項(Q-n の行)、仕様の差分があれば `snapshots.diff_prompt` の要点(行数の上限内)。最初の行は「次の仕様書の続きを実装して。着手する前に SpecStatus の show で状態を確かめること。」。
+- `specinfo.py`: `mark(statuses, read=...) -> None`。仕様書の本文から (1) 「未確定事項」の見出しの節の表で、回答の済んでいない行(「**未確認**」を含む、または回答の列が空・「?」)を数えて `ps.questions = {"open", "mine"}`(mine は回答者の列が「私」)。(2) 「撤退基準」の見出しの節の表から判定の期日の列(「Phase 0」「Phase 2 の後」など)を読み、記録の `done_phase` がそのフェーズ以上なら due。`ps.retreat = {"due", "phase", "ids"}`(期日が文章で読めなければ phase は "不明"、due は False)。見出しの番号は揺れる(§12 と §13 など)ので見出しの語で探す。実データ: vault の `仕様書MDファイル\` で、約120本に撤退基準、約140本に未確定事項がある。読むだけ。
+- `deps.py`: `mark(statuses) -> None`。仕様書の「前提」の見出しの節(無ければ「関連」の行)の `[[wikilink]]` で、別の仕様書(プロジェクトの文書の stem)を指す物のうち、状態が実装完了・導入済みでない物の名前を `ps.blocked_by` に。参考で張っただけのリンクを避けるため、前提の節と「依存」と書かれた行だけを見る。循環しても止まらない。`mermaid(statuses) -> list[str]`(依存のある物だけの graph LR。一覧ノートに入れる。多ければ上位 30 本)。
+- `recommend.py`: 理由に「記録漏れかも」(gap)・「撤退の判定の時期」(retreat due)・「あなたの回答待ち n」(questions.mine)を足す(重みは先頭の定数)。前提が未完(blocked_by)の物は点を下げる。既存のテストは通ったままにする。
+- テスト: `tests/test_gaps.py`・`tests/test_resume.py`・`tests/test_specinfo.py`・`tests/test_deps.py`。
+
+### 担当 5: 外の情報と集計(GitHub の反響・ペース・作業の配分・依存の古さ)
+触ってよい: `github.py`・新しい `pace.py`・`worklog.py`・`eol.py`・それぞれのテスト(既存の `tests/test_timeline.py` 等の github 部分も)。
+- `github.py`: `_trim_repos` で `stargazers_count`・`forks_count` を残し、`_trim_release` で `assets[].download_count` の合計を残す。`info` の dict に `stars`・`forks`・`downloads`(古いキャッシュで無ければ None)。API の呼び出しは増やさない。`attach(..., offline=False)` を足し、offline ならキャッシュだけ使う(fetch しない)。
+- `pace.py`: `mark(statuses, today) -> None`。記録の `done_phase` が増えた時刻(`ps.folded.history` の各記録の `fields` の `done_phase` と `at`)から、1 フェーズにかかった日数の中央値を出し、`last_phase - done_phase` を掛けて `ps.pace = {"days_per_phase", "remaining", "eta_days"}`。done_phase が2回以上記録されていない物は None。`overall(statuses, today, weeks=8) -> dict`(全体: 直近 weeks 週に実装完了になった数の週平均と、未着手・着手済・一部未実装の残りの数から「今のペースなら N 週」。近似と分かる文字も返す)。
+- `worklog.py`: `counts(vault, cfg, statuses, today, weeks=4) -> list[tuple[str, list[int]]]`。開発ログ(`[evidence.devlog] dir` の `YYYY-MM-DD.md`)の `### 🕒 [HH:MM] 見出し` を、見出しに出てくるプロジェクト名(既存の devlog の読み手の当て方を使い回す。`specstatus/evidence/devlog.py` を読むこと)ごとに週単位で数える。`section(...) -> list[str]`(週のまとめと一覧ノートに入れる「## 作業の配分(直近 4 週)」の表。上位 10)。数えるのは件数で、時間ではないと表の下に書く。
+- `eol.py`: `attach(statuses, cfg, fetch=None, now=None, folder=None, offline=False) -> str`(osv.attach と同じ作り。戻り値は一言)。設定 `[eol] enabled = false`(既定は切。`cfg.get("eol", {})`)、`refresh_hours = 24`。実装フォルダの `package.json`(engines.node、依存)・`pyproject.toml`/`requirements.txt`(requires-python、依存)・`.python-version`・`.nvmrc` から、ランタイムの版のサポート期限を `https://endoflife.date/api/{product}.json`(登録不要)で、依存の最新の版を `https://pypi.org/pypi/{name}/json` と `https://registry.npmjs.org/{name}/latest` で取る。比べるのは major だけ(`^1.2`・`>=` などは先頭の数字)。`ps.eol = {"runtimes": [...], "outdated": [...]}`(遅れている物・切れている物だけ。無ければ None)。結果は `%LOCALAPPDATA%\SpecStatus\eol.json` に名前ごとに refresh_hours 残す。1回の load で聞く数に上限(例 60)。osv.py の lockfile の読み方を参考にしてよい(osv.py は担当 1 の物なので読むだけ)。
+- テスト: `tests/test_github_stats.py`・`tests/test_pace.py`・`tests/test_worklog.py`・`tests/test_eol.py`。

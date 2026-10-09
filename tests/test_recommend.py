@@ -45,3 +45,19 @@ def test_section_lines():
     assert lines[0] == "## 今日のおすすめ(1)"
     assert lines[-1] == "| [[X]] | 一部未実装 | 一部未実装・食い違い |"
     assert R.section([], TODAY, str)[0] == "## 今日のおすすめ(0)"
+
+
+def test_gap_retreat_questions_and_blocked():
+    a = ps("A", "W/A", "着手済")
+    a.gap = "git 10/08 > 記録 10/05"
+    a.retreat = {"due": True, "phase": "Phase 0", "ids": ["R-1"]}
+    a.questions = {"open": 3, "mine": 2}
+    pts, why = R.score(a, TODAY)
+    assert why == ["記録漏れかも", "撤退の判定の時期", "あなたの回答待ち 2"]
+    assert pts == R.W_GAP + R.W_RETREAT_DUE + 2 * R.W_QUESTION_MINE_EACH
+    a.blocked_by = ["B"]
+    pts2, why2 = R.score(a, TODAY)
+    assert pts2 == max(pts + R.W_BLOCKED, 1) and why2[-1] == "前提が未完: B"
+    done = ps("D", "W/D", "実装完了")
+    done.questions = {"open": 1, "mine": 1}                                 # 終えた物の回答待ちは点にしない
+    assert R.score(done, TODAY) == (0, [])

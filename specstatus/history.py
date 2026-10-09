@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from typing import Callable
 
@@ -13,6 +14,7 @@ DOING = ("着手済", "一部未実装")
 BUILT = ("実装完了", "一部未実装")      # 仕様書の書き換えを見る状態
 CHANGE_GRACE_S = 60                     # 記録と同じ作業で仕様書を直した分は数えない
 GIT_TIMEOUT_S = 5
+GIT_WORKERS = 8                         # git log を同時に走らせる数
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # 窓の exe から呼んでも黒い窓を出さない
 
 
@@ -91,14 +93,23 @@ def mark_spec_changed(statuses: list[ProjectStatus], mtime: Callable[[str], floa
             ps.spec_changed = datetime.fromtimestamp(newest).date().isoformat()
 
 
+def git_dates(paths: list[str], git_date: Callable[[str], str | None] = git_last_date) -> dict[str, str | None]:
+    """フォルダごとの git の最後のコミット日。git は1本ずつ待つと遅いので、まとめて並列に走らせる(同じフォルダは1回)。"""
+    uniq = list(dict.fromkeys(paths))
+    if len(uniq) <= 1:
+        return {p: git_date(p) for p in uniq}
+    with ThreadPoolExecutor(max_workers=min(GIT_WORKERS, len(uniq))) as ex:
+        return dict(zip(uniq, ex.map(git_date, uniq)))
+
+
 def mark_stale(statuses: list[ProjectStatus], today: date, stale_days: int,
                git_date: Callable[[str], str | None] = git_last_date) -> None:
     """途中(着手済・一部未実装)の物に最後に動いた日を付け、stale_days 日以上動いていなければ stale_days に日数を入れる。"""
-    for ps in statuses:
-        if ps.state not in DOING:
-            continue
+    doing = [ps for ps in statuses if ps.state in DOING]
+    gits = git_dates([p for ps in doing for p in impl_dirs(ps)], git_date)
+    for ps in doing:
         r = ps.folded.last_record
-        dates = [r.at[:10] if r else None, ps.last_devlog_date] + [git_date(p) for p in impl_dirs(ps)]
+        dates = [r.at[:10] if r else None, ps.last_devlog_date] + [gits[p] for p in impl_dirs(ps)]
         dates = [d for d in dates if d]
         if not dates:
             continue

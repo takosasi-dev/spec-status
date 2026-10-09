@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 
 from .model import Doc, ProjectStatus
-from .textutil import read_text
+from .textutil import nfc, read_text
 
 PROMPT_MAX_LINES = 300       # 指示文に入れる差分の行の上限
 
@@ -23,8 +23,9 @@ def folder_path(folder: str | None = None) -> str:
 
 
 def _file(doc: Doc, folder: str | None) -> str:
-    # vault ごとに分かれるよう絶対パスで名前を付ける(別の vault やテストの同じ相対パスと混ざらない)
-    h = hashlib.sha1(os.path.normcase(os.path.abspath(doc.abs_path)).encode("utf-8")).hexdigest()[:20]
+    # vault ごとに分かれるよう絶対パスで名前を付ける(別の vault やテストの同じ相対パスと混ざらない)。
+    # NFC にそろえる(NFD の名前のファイルも、実際のパスで読みつつ写しの名前は前と同じ)
+    h = hashlib.sha1(nfc(os.path.normcase(os.path.abspath(doc.abs_path))).encode("utf-8")).hexdigest()[:20]
     return os.path.join(folder_path(folder), h + ".json")
 
 

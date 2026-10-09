@@ -2,6 +2,7 @@
 # tkinter を import しない。pytest はここだけを確かめる(AC-39・AC-42・AC-43)。
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from . import render
@@ -144,6 +145,77 @@ def github_detail(ps: ProjectStatus) -> str:
     if not g:
         return "-"
     return S.GITHUB_TEXT.format(repo=g["repo"], release=g["release"] or "-", pushed=g["pushed_at"], ci=g["ci"] or "-")
+
+
+def extra_details(ps: ProjectStatus) -> dict[str, str]:
+    """v0.7.0 の欄(strings.EXTRA_FIELDS のキー → 文字)。値が無い物・0 の物は入れない。"""
+    out: dict[str, str] = {}
+    if ps.gap:
+        out["gap"] = ps.gap
+    q = ps.questions or {}
+    if q.get("open"):
+        out["questions"] = S.QUESTIONS_TEXT.format(open=q["open"]) + (
+            S.QUESTIONS_MINE.format(mine=q["mine"]) if q.get("mine") else "")
+    if ps.retreat and ps.retreat.get("due"):
+        out["retreat"] = ps.retreat.get("phase") or "-"
+    if ps.blocked_by:
+        out["blocked_by"] = S.BLOCKED_SEP.join(ps.blocked_by)
+    pace = ps.pace or {}
+    if pace.get("remaining") and pace.get("eta_days") is not None:
+        out["pace"] = S.PACE_TEXT.format(remaining=pace["remaining"], days=round(pace["eta_days"]))
+    eol = ps.eol or {}
+    ended = sum(1 for r in eol.get("runtimes") or [] if r.get("ended"))
+    old = len(eol.get("outdated") or [])
+    parts = [t.format(n=n) for t, n in ((S.EOL_ENDED, ended), (S.EOL_OUTDATED, old)) if n]
+    if parts:
+        out["eol"] = S.BLOCKED_SEP.join(parts)
+    gh = ps.github or {}
+    parts = [t.format(n=gh[k]) for t, k in ((S.GH_STARS, "stars"), (S.GH_FORKS, "forks"),
+                                             (S.GH_DOWNLOADS, "downloads")) if gh.get(k) is not None]
+    if parts:
+        out["gh_stats"] = S.BLOCKED_SEP.join(parts)
+    return out
+
+
+def filter_summary(states: list[str], category: str | None, checks: list[str], query: str) -> str:
+    """件数の横の「絞り込み中: 確認待ち・Windows」。checks は入っているチェックの見出し。何も無ければ ""。"""
+    items = [*states, *([category] if category else []), *checks]
+    q = query.strip()
+    if q:
+        items.append(S.FILTER_SEARCH.format(q=q if len(q) <= 20 else q[:20] + "…"))     # 帯を押し出さない長さに
+    return S.FILTERING.format(items="・".join(items)) if items else ""
+
+
+def flash_text(names: list[str], fields: dict) -> str:
+    """記録した直後の一言。「○○を着手済にしました(Ctrl+Z で戻す)」。2件以上は「3 件を…」。"""
+    who = names[0] if len(names) == 1 else S.FLASH_MANY.format(n=len(names))
+    if fields.get("state"):
+        text = S.FLASH_STATE.format(who=who, state=fields["state"])
+    elif "waiting" in fields:
+        text = S.FLASH_WAITING.format(who=who, waiting=fields["waiting"])
+    elif "note" in fields:
+        text = (S.FLASH_NOTE if fields["note"] else S.FLASH_NOTE_CLEARED).format(who=who)
+    elif "impl_add" in fields:
+        text = S.FLASH_IMPL_ADD.format(who=who)
+    elif "impl_remove" in fields:
+        text = S.FLASH_IMPL_REMOVE.format(who=who)
+    else:
+        text = S.FLASH_OTHER.format(who=who)
+    return text + S.FLASH_UNDO_HINT
+
+
+def events_stamp(events_dir: str) -> tuple[float, int, int]:
+    """記録のフォルダの (*.jsonl の最新の更新時刻, 件数, 大きさの合計)。窓に戻ったときに前回と比べて読み直す。"""
+    newest, n, size = 0.0, 0, 0
+    try:
+        with os.scandir(events_dir) as it:
+            for e in it:
+                if e.name.endswith(".jsonl") and e.is_file():
+                    st = e.stat()
+                    newest, n, size = max(newest, st.st_mtime), n + 1, size + st.st_size
+    except OSError:         # フォルダがまだ無い
+        pass
+    return newest, n, size
 
 
 def count_by_state(statuses: list[ProjectStatus]) -> dict[str, int]:
