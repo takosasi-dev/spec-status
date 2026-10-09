@@ -11,7 +11,7 @@ Obsidian の vault に置いた仕様書が「どこまで実装されたか」�
 - **GUI**: 絞り込み・詳細・記録ができる窓(tkinter)
 - **JSON**(`仕様書MDファイル/00_実装状況.json`): Claude Code やほかの道具が読む
 
-Python 3.11 以上の標準ライブラリだけで動きます。ネットワークに出るのは、設定で GitHub のユーザー名を入れたときに GitHub の公開 API を読むときだけです(登録・トークン不要)。
+Python 3.11 以上の標準ライブラリだけで動きます。ネットワークに出るのは、GitHub の公開 API を読むときだけです(登録・トークン不要)。読むのは、GUI を開いたときの新しい版の確認(1日1回まで)と、設定で GitHub のユーザー名を入れたときのリポジトリの情報です。
 
 ## 画面
 
@@ -94,6 +94,7 @@ python specstatus.py mark  <宛先> [--state <状態>] [--done-phase <番号>] [
 python specstatus.py build
 python specstatus.py check
 python specstatus.py weekly [--date <YYYY-MM-DD>] [--write]
+python specstatus.py update [--check]
 python specstatus.py gui
 ```
 
@@ -132,15 +133,28 @@ Claude Code に仕様書を渡して実装させるときは、次のような�
 
 セッションの始めに、そのフォルダが何の実装かを Claude Code に見せたいときは、SessionStart フックで `ss where --hook` を呼びます。当たらなければ何も出さず、いつも終了コード 0 です。
 
+## 新しい版にする
+
+GUI を開いたとき(1日1回まで)に [GitHub の Releases](https://github.com/takosasi-dev/spec-status/releases) を見て、新しい版があれば上に「v0.3.0 が出ています [更新する]」を出します。押すまでは何も変えません。
+
+- **vault の spec-status/**: Release のソースで、`specstatus.py` などの実行物と `specstatus/` を入れ替えます。`data/`(設定と記録)には触りません。vault を同期していれば、ほかの PC にも届きます。
+- **exe**: Release に付いた `SpecStatus-v<版>-windows.zip` を隣に広げ、窓を閉じた後に入れ替えて開き直します(PowerShell を使います)。`vault.txt` は引き継ぎます。
+
+CLI では `python specstatus.py update` で vault の spec-status/ を最新にします(`--check` は確かめるだけ)。版の分からない古い置き方(v0.2.0 以前)からは、一度だけ手で置き直してください。
+
 ## exe にする
 
-GUI だけを窓アプリにできます(CLI は `python specstatus.py` のまま)。PyInstaller が要ります。
+GUI だけを窓アプリにできます(CLI は `python specstatus.py` のまま)。
+
+[Releases](https://github.com/takosasi-dev/spec-status/releases) の `SpecStatus-v<版>-windows.zip` を広げれば、そのまま使えます。初めて開いたときに vault のフォルダ(`spec-status/` を置いた物)を選ぶと、隣の `vault.txt` に覚えます。
+
+自分で作るときは PyInstaller が要ります。
 
 ```
-python build.py --vault <vault>
+python build.py --vault <vault> [--zip]
 ```
 
-`dist/SpecStatus/SpecStatus.exe` ができ、隣の `vault.txt` に書いた vault を開きます。exe は作った時点のコードを抱えているので、コードを直したら作り直してください。
+`dist/SpecStatus/SpecStatus.exe` ができ、隣の `vault.txt` に書いた vault を開きます。`--zip` を付けると、Release に付ける zip(`vault.txt` を入れない)も作ります。exe は作った時点のコードを抱えているので、コードを直したら作り直してください。
 
 ## 開発
 
@@ -166,4 +180,4 @@ MIT。[LICENSE](LICENSE) を見てください。
 
 ## 開発状況
 
-作者が自分の vault(仕様書 250 本ほど)で使い始めたところです(v0.2.0)。Windows 11 でだけ確認しています。
+作者が自分の vault(仕様書 250 本ほど)で使い始めたところです(v0.3.0)。Windows 11 でだけ確認しています。

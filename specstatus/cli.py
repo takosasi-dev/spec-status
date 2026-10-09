@@ -1,4 +1,4 @@
-# CLI のサブコマンド(list / show / where / mark / build / check / weekly / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
+# CLI のサブコマンド(list / show / where / mark / build / check / weekly / update / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
 # 書き込みは mark と build が core 経由で行うだけ。終了コードは §9.7。
 from __future__ import annotations
 
@@ -62,6 +62,9 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("weekly", parents=[common])
     p.add_argument("--date", type=date.fromisoformat, default=None, help="この日を含む週(既定は今日)")
     p.add_argument("--write", action="store_true", help="標準出力でなく [weekly] dir に書く")
+
+    p = sub.add_parser("update", parents=[common])
+    p.add_argument("--check", action="store_true", help="確かめるだけ(入れ替えない)")
 
     for name in ("build", "check", "gui"):
         sub.add_parser(name, parents=[common])
@@ -173,6 +176,30 @@ def _mark_fields(a) -> dict | str:
     return f
 
 
+def _update(vault: str, check_only: bool) -> int:
+    """vault の spec-status を GitHub の最新の Release にする。0=最新か入れ替えた、1=新しい版あり(--check)、2=失敗。"""
+    from . import update
+    try:
+        rel = update.latest(force=True)
+    except update.UpdateError as e:
+        _err(str(e))
+        return 2
+    have = update.vault_version(vault)
+    _out(f"最新: {rel['tag']}  vault: {'v' + have if have else '(版が分からない)'}  {rel['url']}")
+    if not update.is_newer(rel["tag"], have):
+        _out("vault の SpecStatus は最新です。")
+        return 0
+    if check_only:
+        _out(f"{rel['tag']} に更新できます(specstatus.py update)。")
+        return 1
+    try:
+        _out(update.update_vault(vault, rel["tag"]))
+    except (update.UpdateError, OSError) as e:
+        _err(f"更新できませんでした: {e}")
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None, default_vault: str | None = None) -> int:
     a = _parser().parse_args(argv)
     vault = os.path.abspath(a.vault or default_vault or ".")
@@ -187,6 +214,8 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
         if msg:
             _err(msg)
         return code
+    if a.cmd == "update":
+        return _update(vault, a.check)
 
     try:
         board = core.load(vault, a.config)

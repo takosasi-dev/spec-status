@@ -6,6 +6,8 @@ from __future__ import annotations
 import ctypes
 import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
@@ -15,7 +17,7 @@ from collections import deque
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 
-from . import core, history
+from . import core, history, update
 from . import guilogic as G
 from . import strings as S
 from . import theme
@@ -90,6 +92,9 @@ class App:
         self.reload_btn.pack(side="right")
         self.board_btn = ttk.Button(head, text=S.OPEN_BOARD, command=self.open_board)
         self.board_btn.pack(side="right", padx=px(6))
+        self.update_btn = ttk.Button(head, text=S.UPDATE_BUTTON, command=self.do_update, style="Accent.TButton")
+        self.update_lbl = ttk.Label(head, text="", style="Muted.TLabel")
+        self.release: dict | None = None
         self.gen_lbl = ttk.Label(head, text="", style="Muted.TLabel")
         self.gen_lbl.pack(side="right", padx=px(8))
 
@@ -368,6 +373,9 @@ class App:
             return
         self.build_warn = ""
         self._apply_board(board)
+        if self.release is None:
+            self.release = {}
+            self._check_update()
 
     def _show_error(self, err: Exception) -> None:
         self.board = None
@@ -402,6 +410,63 @@ class App:
         else:
             self.warn_lbl.grid_remove()
         self.refresh_table(keep)
+
+    # ---------- 更新 ----------
+    def _check_update(self) -> None:
+        """GitHub の最新の Release を1日1回まで見て、vault か exe より新しければ見出しにボタンを出す。黙って失敗する。"""
+        def work():
+            try:
+                rel = update.latest()
+                st = update.status(self.vault)
+                if any(update.needs(rel, st)):
+                    self.q.put((self._show_update, (rel,)))
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update(self, rel: dict) -> None:
+        self.release = rel
+        self.update_lbl.configure(text=S.UPDATE_AVAILABLE.format(tag=rel["tag"]))
+        self.update_btn.pack(side="right", padx=self.px(6), before=self.gen_lbl)
+        self.update_lbl.pack(side="right", after=self.update_btn)
+
+    def do_update(self) -> None:
+        rel = self.release
+        if not rel or self.busy:
+            return
+        st = update.status(self.vault)
+        do_vault, do_exe = update.needs(rel, st)
+        what = "\n".join(w for w, on in ((S.UPDATE_WHAT_VAULT, do_vault), (S.UPDATE_WHAT_EXE, do_exe)) if on)
+        if not what or not messagebox.askyesno(S.UPDATE_TITLE, S.UPDATE_CONFIRM.format(
+                tag=rel["tag"], what=what, notes=rel.get("notes", "")[:600]), parent=self.root):
+            return
+        self.update_lbl.configure(text=S.UPDATE_RUNNING)
+
+        def work():
+            if do_vault:
+                update.update_vault(self.vault, rel["tag"])
+            return update.stage_exe(rel.get("exe_zip"), st["exe"]) if do_exe else None
+
+        def finished(staged, err):
+            self._set_busy(False)
+            if err is not None:
+                self.update_lbl.configure(text=S.UPDATE_AVAILABLE.format(tag=rel["tag"]))
+                messagebox.showerror(S.UPDATE_TITLE, S.UPDATE_FAILED.format(err=err), parent=self.root)
+                return
+            if staged:                          # exe: 窓を閉じた後に入れ替えて開き直す
+                update.start_swap(st["exe"], staged)
+                self.root.destroy()
+                return
+            if not st["exe"]:                   # vault のコードで動いている: 新しいコードで開き直す
+                args = [sys.executable, os.path.join(self.vault, "spec-status", "specstatus.py"), "gui", "--vault", self.vault]
+                if self.config_path:
+                    args += ["--config", self.config_path]
+                subprocess.Popen(args, cwd=self.vault)
+                self.root.destroy()
+                return
+            self.update_btn.pack_forget()
+            self.update_lbl.configure(text=S.UPDATE_DONE_VAULT.format(tag=rel["tag"]))
+        self._run(work, finished)
 
     # ---------- 表 ----------
     def _on_search(self) -> None:
