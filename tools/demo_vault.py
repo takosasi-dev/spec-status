@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from specstatus import core, records  # noqa: E402
+from specstatus import core, pngutil, records  # noqa: E402
 
 CONFIG = """[pc]
 name = "pc"
@@ -73,10 +73,49 @@ DAYS_AGO = {"ClipNote": 77, "LogLens": 63, "DiffDesk": 60, "Kakeibo": 45, "TabSh
             "TagTidy": 4, "FocusTimer": 2}
 
 
-def spec_text(name: str, desc: str, phases: int) -> str:
+# 受け入れ基準のチェック(済の数)。4つのうち何個にチェックを付けておくか
+AC_DONE = {"実装完了": 4, "一部未実装": 3, "着手済": 1}
+COLORS = ["#2f7ed8", "#23a565", "#d4891a", "#8e5bd8", "#d84a6a", "#159aa8", "#5b6b7d", "#c25a1e"]
+CHANGED = "LogLens"          # 記録の後に仕様書を書き換えた扱いにする(「仕様が変わった物」の見本)
+VULNERABLE = {"ClipNote": "requests==2.19.0\n"}   # 既知の脆弱性がある古い版(「依存の脆弱性」の見本。OSV を有効にしたときだけ数える)
+
+
+def spec_text(name: str, desc: str, phases: int, ac_done: int) -> str:
     rows = "\n".join(f"| {i} | {desc}の段階 {i} |" for i in range(1, phases + 1))
+    acs = "\n".join(f"- [{'x' if i <= ac_done else ' '}] AC-{i}: {desc}の確認 {i}" for i in range(1, 5))
     return (f"---\n作成日: 2026-09-01\n---\n# {name} 仕様書\n\n{desc}のツール(架空)。\n\n"
-            f"## 実装フェーズ\n\n| Phase | 内容 |\n|---|---|\n{rows}\n")
+            f"## 実装フェーズ\n\n| Phase | 内容 |\n|---|---|\n{rows}\n\n## 受け入れ基準\n\n{acs}\n")
+
+
+def icon_png(color: str, shape: int, size: int = 64) -> bytes:
+    """角の丸い色の四角に白い図形(架空のアプリのアイコン)。4点ずつ取ってなめらかにする。"""
+    c = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+    m, rad = size * 0.06, size * 0.24
+    px = bytearray(size * size * 4)
+
+    def in_box(x, y):
+        dx = max(m + rad - x, 0, x - (size - m - rad))
+        dy = max(m + rad - y, 0, y - (size - m - rad))
+        return dx * dx + dy * dy <= rad * rad
+
+    def in_glyph(x, y):
+        u, v = (x - size / 2) / size, (y - size / 2) / size
+        return [u * u + v * v <= 0.045,
+                abs(u) <= 0.2 and abs(v) <= 0.2,
+                -0.2 <= v <= 0.18 and abs(u) <= (v + 0.2) * 0.6,
+                abs(v) <= 0.2 and (abs(u + 0.12) <= 0.05 or abs(u - 0.12) <= 0.05 or abs(u) <= 0.05 and v >= 0)][shape % 4]
+    for y in range(size):
+        for x in range(size):
+            box = glyph = 0
+            for sx, sy in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
+                if in_box(x + sx, y + sy):
+                    box += 1
+                    glyph += in_glyph(x + sx, y + sy)
+            if box:
+                t = glyph / box
+                i = (y * size + x) * 4
+                px[i:i + 4] = bytes([round(ch * (1 - t) + 255 * t) for ch in c] + [round(255 * box / 4)])
+    return pngutil.encode(size, size, px)
 
 
 def main() -> int:
@@ -95,11 +134,15 @@ def main() -> int:
     cfg = os.path.join(vault, "spec-status", "data", "config", "demo.toml")
     with open(cfg, "w", encoding="utf-8") as f:
         f.write(CONFIG)
-    for folder, name, desc, phases, _ in PROJECTS:
+    old = (datetime.now() - timedelta(days=100)).timestamp()
+    spec_paths = {}
+    for folder, name, desc, phases, rec in PROJECTS:
         d = os.path.join(vault, "仕様書MDファイル", folder, name)
         os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, f"{name}_{desc}_仕様書.md"), "w", encoding="utf-8") as f:
-            f.write(spec_text(name, desc, phases))
+        spec_paths[name] = os.path.join(d, f"{name}_{desc}_仕様書.md")
+        with open(spec_paths[name], "w", encoding="utf-8") as f:
+            f.write(spec_text(name, desc, phases, AC_DONE.get(rec[0], 0) if rec else 0))
+        os.utime(spec_paths[name], (old, old))      # 記録より前に書いた仕様書にする
     board = core.load(vault, cfg)
     by_name = {ps.project.name: ps for ps in board.statuses}
     for folder, name, desc, phases, rec in PROJECTS:
@@ -115,12 +158,20 @@ def main() -> int:
             work = os.path.join(vault, "work", name)
             os.makedirs(work, exist_ok=True)
             fields["impl_add"] = [work.replace("\\", "/")]
+            i = [p[1] for p in PROJECTS].index(name)
+            with open(os.path.join(work, "icon.png"), "wb") as f:
+                f.write(icon_png(COLORS[i % len(COLORS)], i))
+            if name in VULNERABLE:
+                with open(os.path.join(work, "requirements.txt"), "w", encoding="utf-8") as f:
+                    f.write(VULNERABLE[name])
         at = datetime.now().astimezone() - timedelta(days=DAYS_AGO.get(name, 0))
         records.now_iso = lambda at=at: at.isoformat(timespec="seconds")
         code, msg = core.write_mark(board, by_name[name], fields, "user")
         if code:
             print("記録できません:", name, msg, file=sys.stderr)
             return 1
+    recent = (datetime.now() - timedelta(days=3)).timestamp()
+    os.utime(spec_paths[CHANGED], (recent, recent))
     code, msg, _ = core.build(vault, cfg)
     print(f"作りました: {vault}(build {code})")
     return code

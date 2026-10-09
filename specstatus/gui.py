@@ -17,7 +17,7 @@ from collections import deque
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 
-from . import core, history, update
+from . import core, history, icons, update
 from . import guilogic as G
 from . import strings as S
 from . import theme
@@ -170,12 +170,16 @@ class App:
         self.table.grid(row=0, column=0, sticky="nsew")
         self.table.columnconfigure(0, weight=1)
         self.table.rowconfigure(0, weight=1)
-        cols = [k for k, _ in S.COLUMNS[1:]]     # 状態は #0 の列に丸と一緒に出す
+        # プロジェクトは #0 の列に、状態の丸とアイコンを並べた画像と一緒に出す
+        cols = [k for k, _ in S.COLUMNS if k != "name"]
         self.tree = ttk.Treeview(self.table, columns=cols, show="tree headings", selectmode="extended")
-        widths = {"state": 112, "name": 200, "spec_dir": 200, "phase": 56, "waiting": 68,
-                  "last": 120, "source": 130, "conflict": 72, "github": 84}
+        widths = {"state": 84, "name": 230, "spec_dir": 200, "phase": 52, "waiting": 66,
+                  "last": 104, "source": 112, "conflict": 72, "github": 76}
+        self.icon_paths: dict[str, dict[int, str]] = {}      # project.key -> {大きさ: PNG}(icons.find_all)
+        self.row_imgs: dict[tuple, tk.PhotoImage] = {}
+        self.icon_imgs: dict[str, tk.PhotoImage] = {}
         for k, title in S.COLUMNS:
-            cid = "#0" if k == "state" else k
+            cid = "#0" if k == "name" else k
             self.tree.heading(cid, text=title, anchor="w", command=lambda c=k: self.sort_by(c))
             self.tree.column(cid, width=px(widths[k]), minwidth=px(40), stretch=False,
                              anchor="center" if k in ("phase", "conflict") else "w")
@@ -216,8 +220,8 @@ class App:
     def _fit_columns(self, width: int) -> None:
         """プロジェクトの列で表の幅に合わせる(Treeview は狭くなっても列を縮めないため)。"""
         shown = ["#0", *self.tree.cget("displaycolumns")]
-        fixed = sum(self.tree.column(c, "width") for c in shown if c != "name")
-        self.tree.column("name", width=max(self.px(120), width - fixed - 2))
+        fixed = sum(self.tree.column(c, "width") for c in shown if c != "#0")
+        self.tree.column("#0", width=max(self.px(140), width - fixed - 2))
 
     def _place_sashes(self) -> None:
         """左の分類と右の詳細の幅を決める(PanedWindow は最初に中身の希望の幅で分けてしまうため)。"""
@@ -227,7 +231,7 @@ class App:
             self.root.after(50, self._place_sashes)
             return
         self.pane.sashpos(0, self.px(230))
-        self.pane.sashpos(1, max(self.px(600), w - self.px(420)))
+        self.pane.sashpos(1, max(self.px(600), w - self.px(390)))
 
     def _build_side(self, pane) -> None:
         px = self.px
@@ -279,25 +283,31 @@ class App:
             self.d_info[k], self.d_labels[k] = v, lab
         self.d_github_url = ""
         self.d_info["github"].bind("<Button-1>", lambda e: self.d_github_url and webbrowser.open(self.d_github_url))
-        # 履歴は下から先に詰める(窓が低いとき、後から詰めた証拠の欄の方が縮むように)
-        self.d_hist = self._listbox(d, 2, grow=True, side="bottom")
-        ttk.Label(d, text=S.HISTORY, style="Section.TLabel").pack(side="bottom", anchor="w", pady=(0, px(3)))
-        ttk.Label(d, text=S.DOCS, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
-        self.d_docs = self._listbox(d, 2)
+        # 下半分はタブにして、項目が増えても欄が押し出されないようにする
+        nb = ttk.Notebook(d, style="Detail.TNotebook")
+        nb.pack(fill="both", expand=True)
+
+        def tab(title: str) -> ttk.Frame:
+            f = ttk.Frame(nb, style="Panel.TFrame", padding=(0, px(6), 0, 0))
+            nb.add(f, text=title)
+            return f
+        docs = tab(S.TAB_DOCS)
+        ttk.Label(docs, text=S.DOCS_HINT, style="PanelMuted.TLabel").pack(anchor="w", pady=(0, px(3)))
+        self.d_docs = self._listbox(docs, 2, grow=True)
         self.d_docs.bind("<Double-Button-1>", lambda e: self.open_doc())
-        ttk.Label(d, text=S.IMPLS, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
-        self.d_impl = self._listbox(d, 2)
-        self.d_impl.master.pack_configure(pady=(0, px(4)))
+        impls = tab(S.TAB_IMPLS)
+        bar = ttk.Frame(impls, style="Panel.TFrame")
+        bar.pack(side="bottom", anchor="w", pady=(0, px(4)))
+        self.d_impl = self._listbox(impls, 2, grow=True)
         self.d_impl.bind("<<ListboxSelect>>", lambda e: self._update_impl_buttons())
-        bar = ttk.Frame(d, style="Panel.TFrame")
-        bar.pack(anchor="w", pady=(0, px(10)))
         self.impl_open = ttk.Button(bar, text=S.IMPL_OPEN, command=self.open_impl)
         self.impl_add = ttk.Button(bar, text=S.IMPL_ADD, command=self.add_impl)
         self.impl_rm = ttk.Button(bar, text=S.IMPL_REMOVE, command=self.remove_impl)
         for b in (self.impl_open, self.impl_add, self.impl_rm):
             b.pack(side="left", padx=(0, px(4)))
-        ttk.Label(d, text=S.EVIDENCE, style="Section.TLabel").pack(anchor="w", pady=(0, px(3)))
-        self.d_ev = self._listbox(d, 2)
+        self.d_ev = self._listbox(tab(S.TAB_EVIDENCE), 2, grow=True)
+        self.d_hist = self._listbox(tab(S.TAB_HISTORY), 2, grow=True)
+        self.d_tabs = nb
         self.d_impl_paths: list = []
 
     def _build_edit(self) -> None:
@@ -366,7 +376,16 @@ class App:
     def reload(self) -> None:
         if self.busy:
             return
-        self._run(lambda: self.core.load(self.vault, self.config_path), self._loaded)
+        sizes = (self.px(18), self.px(32))
+
+        def work():
+            board = self.core.load(self.vault, self.config_path)
+            try:
+                self.icon_paths = icons.find_all(board.statuses, sizes)
+            except Exception:       # アイコンが取れなくても一覧は出す
+                pass
+            return board
+        self._run(work, self._loaded)
 
     def _loaded(self, board, err) -> None:
         self._set_busy(False)
@@ -506,13 +525,13 @@ class App:
                 tags.append("stale")
             elif ps.spec_changed:
                 tags.append("changed")
-            self.tree.insert("", "end", iid=iid, text=vals[0], image=self.dots.get(ps.state, ""), values=vals[1:],
-                             tags=tags)
+            self.tree.insert("", "end", iid=iid, text=vals[1], image=self._row_image(ps), tags=tags,
+                             values=[v for (k, _), v in zip(S.COLUMNS, vals) if k != "name"])
             if ps.project.key in keep:
                 sel.append(iid)
         for k, title in S.COLUMNS:
             mark = (S.SORT_DESC if self.sort[1] else S.SORT_ASC) if self.sort and self.sort[0] == k else ""
-            self.tree.heading("#0" if k == "state" else k, text=title + mark)
+            self.tree.heading("#0" if k == "name" else k, text=title + mark)
         self.count_lbl.configure(text=S.ROW_COUNT.format(n=len(rows), total=len(self.board.statuses)))
         if rows:
             self.empty.place_forget()
@@ -522,6 +541,32 @@ class App:
         if sel:
             self.tree.see(sel[0])
         self.on_select()
+
+    def _icon(self, key: str, size: int) -> tk.PhotoImage | None:
+        path = self.icon_paths.get(key, {}).get(size)
+        if not path:
+            return None
+        if path not in self.icon_imgs:
+            try:
+                self.icon_imgs[path] = tk.PhotoImage(master=self.root, file=path)
+            except tk.TclError:
+                return None
+        return self.icon_imgs[path]
+
+    def _row_image(self, ps: ProjectStatus) -> tk.PhotoImage:
+        """行の頭の画像: 状態の色の丸 + プロジェクトのアイコン(無ければ空き)。同じ組み合わせは使い回す。"""
+        size = self.px(18)
+        icon = self._icon(ps.project.key, size)
+        key = (ps.state, str(icon))
+        if key not in self.row_imgs:
+            dot = self.dots[ps.state]
+            w, h = dot.width() + size + self.px(6), max(dot.height(), size)
+            img = tk.PhotoImage(master=self.root, width=w, height=h)
+            img.tk.call(img, "copy", dot, "-to", 0, (h - dot.height()) // 2)
+            if icon is not None:
+                img.tk.call(img, "copy", icon, "-to", dot.width(), (h - size) // 2)
+            self.row_imgs[key] = img
+        return self.row_imgs[key]
 
     def sort_by(self, column: str) -> None:
         self.sort = (column, not self.sort[1]) if self.sort and self.sort[0] == column else (column, False)
@@ -622,7 +667,7 @@ class App:
             lb.delete(0, "end")
         self.d_impl_paths = []
         if len(sel) != 1:
-            self.d_name.configure(text=S.DETAIL_MULTI.format(n=len(sel)) if sel else S.DETAIL_NONE)
+            self.d_name.configure(text=S.DETAIL_MULTI.format(n=len(sel)) if sel else S.DETAIL_NONE, image="")
             self.d_badge.pack_forget()
             for v in self.d_info.values():
                 v.configure(text="")
@@ -631,7 +676,8 @@ class App:
             self._update_impl_buttons()
             return
         ps = sel[0]
-        self.d_name.configure(text=ps.project.name)
+        icon = self._icon(ps.project.key, self.px(32))
+        self.d_name.configure(text=ps.project.name, image=icon or "", compound="left")
         light_badge = ps.state == "証拠なし" and not self.p["dark"]
         self.d_badge.configure(text=ps.state, bg=self.p["states"].get(ps.state, self.p["muted"]),
                                fg=self.p["fg"] if light_badge else "#ffffff")
@@ -832,9 +878,16 @@ def _dpi_scale(root: tk.Tk) -> float:
     return dpi / 96
 
 
+APP_ID = "takosasi.SpecStatus"      # タスクバーで python の仲間にされず、SpecStatus のアイコンで出すための名前
+
+
 def run(vault: str, config_path: str | None) -> int:
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     except Exception:
         pass
     root = tk.Tk()

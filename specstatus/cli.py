@@ -1,10 +1,11 @@
-# CLI のサブコマンド(list / show / where / mark / build / check / weekly / update / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
+# CLI のサブコマンド(list / show / where / mark / build / check / weekly / update / shortcut / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
 # 書き込みは mark と build が core 経由で行うだけ。終了コードは §9.7。
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import date
 
@@ -67,6 +68,9 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("update", parents=[common])
     p.add_argument("--check", action="store_true", help="確かめるだけ(入れ替えない)")
+
+    p = sub.add_parser("shortcut", parents=[common])
+    p.add_argument("--exe", help="exe を開くショートカットにする(無ければ pythonw で specstatus.py gui)")
 
     for name in ("build", "check", "gui"):
         sub.add_parser(name, parents=[common])
@@ -225,6 +229,15 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
         return code
     if a.cmd == "update":
         return _update(vault, a.check)
+    if a.cmd == "shortcut":
+        from . import shortcut
+        try:
+            for path in shortcut.create(vault, a.exe):
+                _out(f"作りました: {path}")
+        except (OSError, subprocess.SubprocessError) as e:
+            _err(f"ショートカットを作れません: {e}")
+            return 2
+        return 0
 
     try:
         board = core.load(vault, a.config)

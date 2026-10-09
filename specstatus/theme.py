@@ -164,6 +164,13 @@ def apply(root: tk.Tk, p: dict, font: tuple, bold: tuple, scale: float) -> None:
     st.map("Treeview.Heading", background=[("active", p["line"])])
     st.configure("Side.Treeview", background=p["bg"], fieldbackground=p["bg"], bordercolor=p["bg"],
                  lightcolor=p["bg"], darkcolor=p["bg"])
+    # 詳細の下半分のタブ(文書・実装フォルダ・証拠・履歴)
+    st.configure("Detail.TNotebook", background=p["panel"], bordercolor=p["line"], lightcolor=p["panel"],
+                 darkcolor=p["panel"], tabmargins=(0, px(2), 0, 0))
+    st.configure("Detail.TNotebook.Tab", background=p["panel2"], foreground=p["muted"], bordercolor=p["line"],
+                 lightcolor=p["panel2"], darkcolor=p["panel2"], padding=(px(10), px(3)), font=font)
+    st.map("Detail.TNotebook.Tab", background=[("selected", p["panel"])], foreground=[("selected", p["fg"])],
+           lightcolor=[("selected", p["panel"])])
     st.configure("TPanedwindow", background=p["bg"])
     st.configure("Sash", sashthickness=px(6), background=p["bg"], lightcolor=p["bg"], bordercolor=p["bg"])
 

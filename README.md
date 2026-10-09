@@ -11,21 +11,33 @@ Obsidian の vault に置いた仕様書が「どこまで実装されたか」�
 - **GUI**: 絞り込み・詳細・記録ができる窓(tkinter)
 - **JSON**(`仕様書MDファイル/00_実装状況.json`): Claude Code やほかの道具が読む
 
-Python 3.11 以上の標準ライブラリだけで動きます。ネットワークに出るのは、GitHub の公開 API を読むときだけです(登録・トークン不要)。読むのは、GUI を開いたときの新しい版の確認(1日1回まで)と、設定で GitHub のユーザー名を入れたときのリポジトリの情報です。設定で `[osv] enabled = true` にしたときだけ、依存の一覧を OSV.dev(登録不要・無料)に送って既知の脆弱性を調べます。
+Python 3.11 以上の標準ライブラリだけで動きます。ネットワークに出るのは、GitHub の公開 API と raw のファイルを読むときだけです(登録・トークン不要)。読むのは、GUI を開いたときの新しい版の確認(1日1回まで)と、設定で GitHub のユーザー名を入れたときのリポジトリの情報とアイコンです。設定で `[osv] enabled = true` にしたときだけ、依存の一覧を OSV.dev(登録不要・無料)に送って既知の脆弱性を調べます。
 
 ## 画面
 
-![SpecStatus の画面(ダーク。45 日止まっている物を選んだところ)](docs/images/screenshot-dark.png)
+![SpecStatus の画面(ダーク。脆弱な依存がある ClipNote を選んだところ)](docs/images/screenshot-dark.png)
 
 ![分類で絞り込んだところ(ライト)](docs/images/screenshot-light.png)
 
-(どちらも `tools/demo_vault.py` で作った架空のプロジェクトで撮ったもの)
+(画像はすべて `tools/demo_vault.py` で作った架空のプロジェクトで撮ったもの。GitHub のリポジトリ名も架空)
 
 - 起動したときの Windows の「アプリのモード」に合わせて、ライトかダークで開きます。
+- 行の頭に、状態の色の丸と**プロジェクトのアイコン**を出します(下の「アイコン」)。
 - 左の分類(仕様書フォルダの1段目と2段目)で絞り込み、上の帯に、その分類の進み具合を状態の色で、右端に実装完了の数の週ごとの推移を出します。
-- 状態の札を押すと、その状態だけに絞れます(複数選べます)。検索はプロジェクト名と仕様書フォルダに当たります。
-- 右の詳細には、状態を決めた根拠・文書・実装フォルダ・証拠・記録の履歴を出します。文書はダブルクリックで Obsidian で開きます。
+- 状態の札を押すと、その状態だけに絞れます(複数選べます)。待ち・食い違い・止まっている物・仕様が変わった物・脆弱性ありでも絞れます。検索はプロジェクト名と仕様書フォルダに当たります。
+- 行の色: 赤 = 食い違いか脆弱な依存、橙 = 止まっている、青 = 仕様が変わった、灰 = 証拠なし。
+- 右の詳細には、状態を決めた根拠・受け入れ基準のチェック・依存の脆弱性・GitHub を出し、下のタブで文書・実装フォルダ・証拠・記録の履歴を見ます。文書はダブルクリックで Obsidian で開きます。
 - 下の欄で、選んだ行の状態・フェーズ・待ち・メモを記録します。複数行を選べば、状態と待ちをまとめて記録できます。Ctrl+Z で取り消せます。
+
+GitHub に新しい版が出ると、見出しに知らせが出ます(押したときだけ入れ替えます。下の「新しい版にする」)。
+
+![新しい版の知らせ](docs/images/update-notice.png)
+
+### 一覧ノート(Obsidian)
+
+GUI と同じ中身を `仕様書MDファイル/00_実装状況.md` に書きます。推移のグラフは Mermaid なので、Obsidian がそのまま描きます。
+
+<img src="docs/images/board-note.png" width="640" alt="一覧ノートの上の方(件数・推移・あなたの番・止まっている物・仕様が変わった物・依存の脆弱性)">
 
 ## 状態の決め方
 
@@ -62,6 +74,12 @@ Python 3.11 以上の標準ライブラリだけで動きます。ネットワ�
 - **受け入れ基準のチェック**: 仕様書の `- [ ] AC-1: …` の形のチェックボックスを数え、「AC 3/12」のように出します(一覧ノートの「AC」の列・詳細)。Obsidian でチェックを付ければ進みます。SpecStatus は仕様書を書き換えません。
 - **依存の脆弱性**: `[osv] enabled = true` のとき、この PC にある実装フォルダ(とその2段下まで)の `package-lock.json`・`requirements.txt`(`==` で固定した行)・`poetry.lock`・`uv.lock`・`Cargo.lock` を読み、[OSV.dev](https://osv.dev/) で既知の脆弱性がある依存を数えます。結果はこの PC の `%LOCALAPPDATA%\SpecStatus\osv.json` に残し、依存ごとに1日1回まで聞き直します。GUI は赤い行と「脆弱性ありだけ」、CLI は `list --vuln`。
 - **Issue とバッジ**: GitHub の公開状況に、開いている Issue の数(プルリクエストを含む)を足しました。一覧ノートの GitHub の表には shields.io(登録不要)の版と CI のバッジを並べ、Obsidian で開くたびに最新を描きます。
+
+## アイコンとショートカット
+
+- **プロジェクトのアイコン**: この PC の実装フォルダの中から探します。Chrome 拡張の `manifest.json` の `icons`、統合版アドオンの `pack_icon.png`、Android の `mipmap-*/ic_launcher.png`、`icon.png`・`app_icon.ico`・`logo.png` などの順です(`node_modules` やビルドの出力は見ません)。無ければ、公開中の GitHub リポジトリのファイルの一覧(API を1リポジトリにつき7日に1回)から同じ順で探し、raw で落とします。縮めた画像はこの PC の `%LOCALAPPDATA%\SpecStatus\icons\` に置き、元のファイルが変わるまで使い回します。PNG と ICO(中に PNG が入っている物)を読みます。
+- **タスクバー**: `start_gui.cmd`(pythonw)で開いても、Python のアイコンにまとめられず、SpecStatus のアイコンで出ます。
+- **ショートカット**: `python specstatus.py shortcut` で、デスクトップとスタートメニューに SpecStatus のアイコンつきのショートカットを作ります(pythonw で GUI を開く)。exe を使うなら `--exe <SpecStatus.exe のパス>`。
 
 ## 動作環境
 
@@ -100,6 +118,7 @@ python specstatus.py build
 python specstatus.py check
 python specstatus.py weekly [--date <YYYY-MM-DD>] [--write]
 python specstatus.py update [--check]
+python specstatus.py shortcut [--exe <SpecStatus.exe のパス>]
 python specstatus.py gui
 ```
 
@@ -185,4 +204,4 @@ MIT。[LICENSE](LICENSE) を見てください。
 
 ## 開発状況
 
-作者が自分の vault(仕様書 250 本ほど)で使い始めたところです(v0.4.0)。Windows 11 でだけ確認しています。
+作者が自分の vault(仕様書 250 本ほど)で使い始めたところです(v0.5.0)。Windows 11 でだけ確認しています。
