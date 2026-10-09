@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -94,6 +95,18 @@ def latest(force: bool = False, now: float | None = None, fetch=_get, path: str 
     return rel
 
 
+def _rmtree(path: str) -> None:
+    """読み取り専用の印が付いたフォルダ・ファイルも消す(vault の中のフォルダには付いていることがある)。消せなければ残す。"""
+    def clear_and_retry(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+    if os.path.exists(path):
+        shutil.rmtree(path, onerror=clear_and_retry)
+
+
 def _safe_members(z: zipfile.ZipFile, prefix: str) -> list[str]:
     """prefix の下の名前だけ。.. や絶対パスで外に出る物があれば止める。"""
     out = []
@@ -125,7 +138,9 @@ def update_vault(vault: str, tag: str, fetch=_get) -> str:
         raise UpdateError(f"vault に SpecStatus が置かれていません: {dest}")
     data = fetch(f"https://github.com/{REPO}/archive/refs/tags/{tag}.zip", timeout=120)
     stage = os.path.join(dest, STAGE)
-    shutil.rmtree(stage, ignore_errors=True)
+    _rmtree(stage)
+    if os.path.exists(stage):
+        raise UpdateError(f"前の更新の作業フォルダを消せません(ほかのアプリが開いていないか確かめてください): {stage}")
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             names = z.namelist()
@@ -151,7 +166,7 @@ def update_vault(vault: str, tag: str, fetch=_get) -> str:
         os.replace(os.path.join(stage, f), os.path.join(dest, f))
     with open(os.path.join(dest, "VERSION.txt"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(f"{tag} GitHub {datetime.now().astimezone().isoformat(timespec='seconds')}\n")
-    shutil.rmtree(stage, ignore_errors=True)
+    _rmtree(stage)
     return f"vault の SpecStatus を {tag} にしました: {dest}"
 
 
@@ -169,7 +184,7 @@ def stage_exe(exe_zip: str | None, folder: str, fetch=_get) -> str:
     exe = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "SpecStatus.exe"
     data = fetch(exe_zip, timeout=300)
     staged = folder.rstrip("\\/") + ".new"
-    shutil.rmtree(staged, ignore_errors=True)
+    _rmtree(staged)
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             top = next((n[: -len(exe)] for n in z.namelist() if n.endswith("/" + exe) and n.count("/") == 1), None)

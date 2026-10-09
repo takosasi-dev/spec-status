@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import stat
 import subprocess
 import zipfile
 
@@ -56,6 +57,8 @@ def vault_with_old_install(tmp_path):
         (dest / f).write_text("old", encoding="utf-8")
     (dest / "specstatus" / "__init__.py").write_text('__version__ = "0.2.0"\n', encoding="utf-8")
     (dest / "specstatus" / "gone.py").write_text("old", encoding="utf-8")
+    (dest / "specstatus" / "assets").mkdir()
+    os.chmod(dest / "specstatus" / "assets", stat.S_IREAD)     # 読み取り専用のフォルダ(vault で実際にあった)
     (dest / "data" / "events" / "pc.jsonl").write_text("{}\n", encoding="utf-8")
     return str(tmp_path / "v"), dest
 
