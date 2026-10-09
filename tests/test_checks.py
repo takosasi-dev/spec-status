@@ -99,3 +99,13 @@ def test_github_cache_version(tmp_path):
     assert github._load(str(path)) == {}
     github._save(str(path), {"u": {"etag": "", "fetched": 1, "data": None}})
     assert github._load(str(path)) == {"u": {"etag": "", "fetched": 1, "data": None}}
+
+
+def test_vault_rel():
+    # 根拠の場所は vault の中なら vault からの相対にする(iPhone ともう1台の PC でも同じ書き方。StatusBadge が開ける)
+    from specstatus.core import vault_rel
+    assert vault_rel("E:/v", "E:/v/説明書/A.md") == "説明書/A.md"
+    assert vault_rel("E:/v", "E:\\v\\開発ログ\\2026-10-09.md#L12") == "開発ログ/2026-10-09.md#L12"
+    assert vault_rel("E:/v", "L:/Claude開発ツール/ToolDeck/tools.toml") == "L:/Claude開発ツール/ToolDeck/tools.toml"
+    assert vault_rel("E:/v", "spec-status/data/events/pc.jsonl#L3") == "spec-status/data/events/pc.jsonl#L3"
+    assert vault_rel("E:/v", "E:/vault2/x.md") == "E:/vault2/x.md"

@@ -46,8 +46,23 @@ def _read_evidence(vault: str, cfg: dict, projects: list[Project]):
             continue
         unreadable += res.unreadable
         for key, evs in res.found.items():
+            for e in evs:
+                e.where = vault_rel(vault, e.where)
+                if e.source == "handoff" and e.state == "着手済":
+                    e.value = vault_rel(vault, e.value)      # メモの場所そのものが値
             found.setdefault(key, {}).setdefault(name, []).extend(evs)
     return found, unreadable, skipped
+
+
+def vault_rel(vault: str, where: str) -> str:
+    """vault の中の場所なら vault からの相対(区切り '/'、行番号の #L はそのまま)にする。どの PC・iPhone でも同じ書き方になる。"""
+    path, sep, line = where.partition("#L")
+    if not path or not os.path.isabs(path):
+        return where
+    root = norm_path(vault) + "/"
+    if not norm_path(path).startswith(root):
+        return where                                    # vault の外(L: の実装フォルダなど)はそのまま
+    return slash(os.path.relpath(path, vault)) + (sep + line if sep else "")
 
 
 def _bind_records(recs: list[Record], projects: list[Project], registry: dict):
