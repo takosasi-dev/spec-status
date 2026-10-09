@@ -17,7 +17,7 @@ from collections import deque
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 
-from . import core, history, icons, update
+from . import actions, cards, core, dashboard, export, history, icons, prefs, query, snapshots, tooltip, update
 from . import guilogic as G
 from . import strings as S
 from . import theme
@@ -48,7 +48,11 @@ class App:
         self.build_warn = ""
         self.q: queue.Queue = queue.Queue()
         self._search_job = None
+        self.prefs = prefs.load()                    # 前回の窓の大きさ・絞り込み・表示など
+        self.bodies: dict[str, str] = {}            # project.key -> 仕様書の本文(検索の素の語に使う)
         self._build()
+        self._restore_prefs()
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll()
         self.reload()
 
@@ -61,13 +65,15 @@ class App:
         px = self.px = lambda v: int(v * self.scale)  # noqa: E731  96dpi 基準の大きさを画面の拡大率に合わせる
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
         w, h = (px(1360), px(840)) if sw >= px(1360) and sh >= px(840) else (int(sw * 0.9), int(sh * 0.9))
-        r.geometry(f"{w}x{h}")
+        r.geometry(self.prefs["geometry"] or f"{w}x{h}")
         r.minsize(min(px(1000), sw), min(px(600), sh))
-        family = S.FONT_FAMILY if S.FONT_FAMILY in tkfont.families(r) else tkfont.nametofont("TkDefaultFont").actual("family")
+        self.family = S.FONT_FAMILY if S.FONT_FAMILY in tkfont.families(r) else tkfont.nametofont("TkDefaultFont").actual("family")
+        size = S.FONT_SIZE + self.prefs["font_delta"]
         for name in ("TkDefaultFont", "TkTextFont", "TkHeadingFont", "TkMenuFont"):
-            tkfont.nametofont(name).configure(family=family, size=S.FONT_SIZE)
-        self.font, self.bold = (family, S.FONT_SIZE), (family, S.FONT_SIZE, "bold")
-        self.p = p = theme.palette(theme.windows_is_dark())
+            tkfont.nametofont(name).configure(family=self.family, size=size)
+        self.font, self.bold = (self.family, size), (self.family, size, "bold")
+        t = self.prefs["theme"]
+        self.p = p = theme.palette(theme.windows_is_dark() if t == "auto" else t == "dark")
         theme.apply(r, p, self.font, self.bold, self.scale)
         if p["dark"]:
             theme.dark_titlebar(r)
@@ -92,6 +98,9 @@ class App:
         self.reload_btn.pack(side="right")
         self.board_btn = ttk.Button(head, text=S.OPEN_BOARD, command=self.open_board)
         self.board_btn.pack(side="right", padx=px(6))
+        self.menu_btn = ttk.Menubutton(head, text=S.MENU)
+        self.menu_btn.configure(menu=self._build_menu(self.menu_btn))
+        self.menu_btn.pack(side="right")
         self.update_btn = ttk.Button(head, text=S.UPDATE_BUTTON, command=self.do_update, style="Accent.TButton")
         self.update_lbl = ttk.Label(head, text="", style="Muted.TLabel")
         self.release: dict | None = None
@@ -140,8 +149,10 @@ class App:
         ttk.Label(tools, text=S.SEARCH).pack(side="left")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._on_search())
-        self.search = ttk.Entry(tools, textvariable=self.search_var, width=32)
+        self.search = ttk.Entry(tools, textvariable=self.search_var, width=30)
         self.search.pack(side="left", padx=(px(6), px(14)))
+        tooltip.TreeTooltip(self.search, lambda e: S.SEARCH_TIP, self)
+        ttk.Label(tools, text=S.FILTER_LABEL, style="Muted.TLabel").pack(side="left")
         self.waiting_var, self.conflict_var = tk.BooleanVar(), tk.BooleanVar()
         ttk.Checkbutton(tools, text=S.WAITING_ONLY, variable=self.waiting_var,
                         command=self.refresh_table).pack(side="left", padx=px(4))
@@ -152,6 +163,13 @@ class App:
             ttk.Checkbutton(tools, text=text, variable=var, command=self.refresh_table).pack(side="left", padx=px(4))
         self.count_lbl = ttk.Label(tools, text="", style="Muted.TLabel")
         self.count_lbl.pack(side="right")
+        # 表示の切り替え(表・カード・概要)
+        self.view_var = tk.StringVar(value="table")
+        views = ttk.Frame(tools)
+        views.pack(side="right", padx=(0, px(12)))
+        for key, text in S.VIEWS:
+            ttk.Radiobutton(views, text=text, value=key, variable=self.view_var, style="Chip.TRadiobutton",
+                            command=self._show_view, takefocus=False).pack(side="left", padx=(0, px(2)))
 
         self.loading_lbl = ttk.Label(r, text=S.LOADING, padding=(px(14), 0), style="Muted.TLabel")
         self.loading_lbl.grid(row=4, column=0, sticky="w")
@@ -166,6 +184,10 @@ class App:
         left.rowconfigure(0, weight=1)
         pane.add(left, weight=4)
 
+        self.cards = cards.CardView(left, self)
+        self.cards.grid(row=0, column=0, sticky="nsew")
+        self.dash = dashboard.DashboardView(left, self)
+        self.dash.grid(row=0, column=0, sticky="nsew")
         self.table = ttk.Frame(left)
         self.table.grid(row=0, column=0, sticky="nsew")
         self.table.columnconfigure(0, weight=1)
@@ -183,8 +205,9 @@ class App:
             self.tree.heading(cid, text=title, anchor="w", command=lambda c=k: self.sort_by(c))
             self.tree.column(cid, width=px(widths[k]), minwidth=px(40), stretch=False,
                              anchor="center" if k in ("phase", "conflict") else "w")
-        # 仕様書フォルダは左の分類と詳細で、食い違いは赤い行と「食い違いだけ」で見る
-        self.tree.configure(displaycolumns=[c for c in cols if c not in ("spec_dir", "conflict")])
+        # 既定では、仕様書フォルダは左の分類と詳細で、食い違いは赤い行と「食い違い」で見る(見出しの右クリックで出せる)
+        self.all_cols = cols
+        self._set_hidden_columns(self.prefs["hidden_columns"] or ["spec_dir", "conflict"])
         self.tree.tag_configure("stripe", background=p["stripe"])
         self.tree.tag_configure("none", foreground=p["muted"])
         self.tree.tag_configure("conflict", foreground=p["error"])
@@ -199,6 +222,8 @@ class App:
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.on_select())
         self.tree.bind("<Return>", lambda e: self.open_primary())
         self.tree.bind("<Double-Button-1>", lambda e: self.open_primary() if self.tree.identify_region(e.x, e.y) in ("cell", "tree") else None)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+        self.tree_tip = tooltip.TreeTooltip(self.tree, self._tree_tip_text, self)
 
         self.empty = ttk.Frame(self.table, padding=px(16), style="Panel.TFrame")
         ttk.Label(self.empty, text=S.EMPTY, style="Panel.TLabel").pack(pady=(0, px(8)))
@@ -216,6 +241,175 @@ class App:
         r.bind_all("<Control-f>", lambda e: (self.search.focus_set(), "break")[1])
         r.bind_all("<F5>", lambda e: self.reload())
         r.bind_all("<Control-z>", lambda e: (self.undo(), "break")[1])
+        r.bind_all("<Control-MouseWheel>", lambda e: (self.change_font(1 if e.delta > 0 else -1), "break")[1])
+        actions.bind_keys(self)
+
+    # ---------- 表の列・右クリック・ツールチップ ----------
+    def _set_hidden_columns(self, hidden: list[str]) -> None:
+        self.hidden_cols = [c for c in hidden if c in self.all_cols]
+        self.tree.configure(displaycolumns=[c for c in self.all_cols if c not in self.hidden_cols])
+        self._fit_columns(self.tree.winfo_width())
+
+    def _toggle_column(self, col: str) -> None:
+        hidden = set(self.hidden_cols) ^ {col}
+        if len(hidden) < len(self.all_cols):        # 全部は隠さない
+            self._set_hidden_columns(sorted(hidden, key=self.all_cols.index))
+
+    def _on_tree_right_click(self, event) -> str:
+        if self.tree.identify_region(event.x, event.y) == "heading":
+            self._columns_menu().tk_popup(event.x_root, event.y_root)
+            return "break"
+        iid = self.tree.identify_row(event.y)
+        if iid and iid not in self.tree.selection():
+            self.tree.selection_set(iid)
+            self.on_select()
+        if self.selected():
+            self.context_menu(event, self.selected())
+        return "break"
+
+    def context_menu(self, event, ps_list: list[ProjectStatus]) -> None:
+        if ps_list and {p.project.key for p in ps_list} != self.selected_keys():
+            self.select_keys([p.project.key for p in ps_list])
+        actions.build_menu(self, ps_list).tk_popup(event.x_root, event.y_root)
+
+    def _tree_tip_text(self, event) -> str | None:
+        iid = self.tree.identify_row(event.y)
+        return tooltip.tooltip_text(self.rows[iid]) if iid in self.rows else None
+
+    def _menu(self, parent) -> tk.Menu:
+        p = self.p
+        return tk.Menu(parent, tearoff=False, background=p["panel"], foreground=p["fg"], activebackground=p["select"],
+                       activeforeground=p["select_fg"], font=self.font, borderwidth=0)
+
+    def _columns_menu(self) -> tk.Menu:
+        m = self._menu(self.root)
+        self._col_vars = {}
+        for k, title in S.COLUMNS:
+            if k == "name":
+                continue
+            v = self._col_vars[k] = tk.BooleanVar(value=k not in self.hidden_cols)
+            m.add_checkbutton(label=title, variable=v, command=lambda c=k: self._toggle_column(c))
+        return m
+
+    # ---------- 表示と書き出しのメニュー ----------
+    def _build_menu(self, parent) -> tk.Menu:
+        m = self._menu(parent)
+        theme_menu = self._menu(m)
+        self.theme_var = tk.StringVar(value=self.prefs["theme"])
+        for key, label in S.THEMES:
+            theme_menu.add_radiobutton(label=label, value=key, variable=self.theme_var, command=self._on_theme)
+        m.add_cascade(label=S.MENU_THEME, menu=theme_menu)
+        m.add_command(label=S.MENU_FONT_UP, command=lambda: self.change_font(1))
+        m.add_command(label=S.MENU_FONT_DOWN, command=lambda: self.change_font(-1))
+        m.add_command(label=S.MENU_FONT_RESET, command=lambda: self.change_font(-self.prefs["font_delta"]))
+        m.add_command(label=S.MENU_COLUMNS, command=lambda: self._columns_menu().tk_popup(
+            self.menu_btn.winfo_rootx(), self.menu_btn.winfo_rooty() + self.menu_btn.winfo_height()))
+        m.add_separator()
+        m.add_command(label=S.MENU_CSV, command=self.export_csv)
+        m.add_command(label=S.MENU_PNG, command=self.export_png)
+        m.add_separator()
+        m.add_command(label=S.MENU_KEYS, command=lambda: actions.show_help(self))
+        return m
+
+    def _on_theme(self) -> None:
+        self.prefs["theme"] = self.theme_var.get()
+        messagebox.showinfo(S.MENU_THEME, S.THEME_RESTART, parent=self.root)
+
+    def change_font(self, step: int) -> None:
+        """文字の大きさをその場で変える(-2〜+6)。部品の見た目は theme.apply をもう一度かけて合わせる。"""
+        delta = max(-2, min(6, self.prefs["font_delta"] + step))
+        if delta == self.prefs["font_delta"]:
+            return
+        self.prefs["font_delta"] = delta
+        size = S.FONT_SIZE + delta
+        for name in ("TkDefaultFont", "TkTextFont", "TkHeadingFont", "TkMenuFont"):
+            tkfont.nametofont(name).configure(size=size)
+        self.font, self.bold = (self.family, size), (self.family, size, "bold")
+        theme.apply(self.root, self.p, self.font, self.bold, self.scale)
+        for lb in (self.d_docs, self.d_impl, self.d_ev, self.d_hist):
+            lb.configure(font=self.font)
+        self.warn_lbl.configure(font=self.font)
+        self.scope_lbl.configure(font=self.bold)
+        self.d_diff.configure(font=self.mono)
+        self.refresh_table()
+
+    def export_csv(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self.root, title=S.EXPORT_TITLE, defaultextension=".csv",
+                                            filetypes=[("CSV", "*.csv")], initialfile="SpecStatus.csv")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(export.to_csv(list(self.rows.values())))
+        except OSError as ex:
+            messagebox.showerror(S.EXPORT_TITLE, S.EXPORT_FAILED.format(err=ex), parent=self.root)
+            return
+        self.copy_flash(S.EXPORT_DONE.format(path=os.path.basename(path)))
+
+    def export_png(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self.root, title=S.EXPORT_TITLE, defaultextension=".png",
+                                            filetypes=[("PNG", "*.png")], initialfile="SpecStatus.png")
+        if not path:
+            return
+        widget = {"cards": self.cards, "dashboard": self.dash}.get(self.view_var.get(), self.root)
+        self.root.update_idletasks()
+        try:
+            export.capture_png(widget, path)
+        except OSError as ex:
+            messagebox.showerror(S.EXPORT_TITLE, S.EXPORT_FAILED.format(err=ex), parent=self.root)
+            return
+        self.copy_flash(S.EXPORT_DONE.format(path=os.path.basename(path)))
+
+    def copy_flash(self, text: str) -> None:
+        before = self.gen_lbl.cget("text")
+        self.gen_lbl.configure(text=text)
+        self.root.after(3000, lambda: self.gen_lbl.configure(text=before))
+
+    # ---------- 表示の切り替えと、前回の状態 ----------
+    def _show_view(self) -> None:
+        view = self.view_var.get()
+        {"table": self.table, "cards": self.cards, "dashboard": self.dash}[view].tkraise()
+        self.prefs["view"] = view
+        self.refresh_table()
+
+    def _restore_prefs(self) -> None:
+        pr = self.prefs
+        for s in pr["states"]:
+            if s in self.chip_vars:
+                self.chip_vars[s].set(True)
+        for key, var in (("waiting", self.waiting_var), ("conflict", self.conflict_var), ("stale", self.stale_var),
+                         ("changed", self.changed_var), ("vuln", self.vuln_var)):
+            var.set(bool(pr["checks"].get(key)))
+        if pr["sort"]["column"] in dict(S.COLUMNS):
+            self.sort = (pr["sort"]["column"], bool(pr["sort"]["descending"]))
+        self.category = pr["category"]
+        self.view_var.set(pr["view"])
+        {"table": self.table, "cards": self.cards, "dashboard": self.dash}[pr["view"]].tkraise()
+        try:
+            self.d_tabs.select(min(pr["detail_tab"], len(self.d_tabs.tabs()) - 1))
+        except tk.TclError:
+            pass
+
+    def _on_close(self) -> None:
+        pr = self.prefs
+        try:
+            pr["geometry"] = self.root.geometry()
+            pr["sashes"] = [self.pane.sashpos(i) for i in range(2)]
+            pr["detail_tab"] = self.d_tabs.index("current")
+        except tk.TclError:
+            pass
+        pr["category"] = self.category
+        pr["states"] = [s for s, v in self.chip_vars.items() if v.get()]
+        pr["checks"] = {"waiting": self.waiting_var.get(), "conflict": self.conflict_var.get(),
+                        "stale": self.stale_var.get(), "changed": self.changed_var.get(), "vuln": self.vuln_var.get()}
+        pr["sort"] = {"column": self.sort[0] if self.sort else None, "descending": bool(self.sort and self.sort[1])}
+        pr["view"] = self.view_var.get()
+        pr["hidden_columns"] = self.hidden_cols
+        try:
+            prefs.save(pr)
+        except OSError:
+            pass                # 覚えられなくても閉じる
+        self.root.destroy()
 
     def _fit_columns(self, width: int) -> None:
         """プロジェクトの列で表の幅に合わせる(Treeview は狭くなっても列を縮めないため)。"""
@@ -229,6 +423,11 @@ class App:
         w = self.pane.winfo_width()
         if w <= 1:          # まだ窓の大きさが決まっていない
             self.root.after(50, self._place_sashes)
+            return
+        saved = self.prefs["sashes"]
+        if len(saved) == 2 and 0 < saved[0] < saved[1] < w:      # 前回の位置
+            self.pane.sashpos(0, saved[0])
+            self.pane.sashpos(1, saved[1])
             return
         self.pane.sashpos(0, self.px(230))
         self.pane.sashpos(1, max(self.px(600), w - self.px(390)))
@@ -307,6 +506,17 @@ class App:
             b.pack(side="left", padx=(0, px(4)))
         self.d_ev = self._listbox(tab(S.TAB_EVIDENCE), 2, grow=True)
         self.d_hist = self._listbox(tab(S.TAB_HISTORY), 2, grow=True)
+        diff = tab(S.TAB_DIFF)
+        self.diff_copy = ttk.Button(diff, text=S.DIFF_COPY, command=self.copy_diff)
+        self.diff_copy.pack(side="bottom", anchor="w", pady=(px(4), px(4)))
+        self.mono = ("Consolas", self.font[1])
+        self.d_diff = tk.Text(diff, height=4, wrap="none", font=self.mono, background=p["panel"], foreground=p["fg"],
+                              relief="flat", borderwidth=0, highlightthickness=1, highlightbackground=p["line"],
+                              insertbackground=p["fg"])
+        self.d_diff.tag_configure("add", foreground=p["states"]["実装完了"])
+        self.d_diff.tag_configure("del", foreground=p["states"]["撤退"])
+        self.d_diff.tag_configure("hunk", foreground=p["muted"])
+        self.d_diff.pack(fill="both", expand=True)
         self.d_tabs = nb
         self.d_impl_paths: list = []
 
@@ -376,7 +586,7 @@ class App:
     def reload(self) -> None:
         if self.busy:
             return
-        sizes = (self.px(18), self.px(32))
+        sizes = (self.px(18), self.px(32), self.px(40))     # 行・詳細・カード
 
         def work():
             board = self.core.load(self.vault, self.config_path)
@@ -384,6 +594,7 @@ class App:
                 self.icon_paths = icons.find_all(board.statuses, sizes)
             except Exception:       # アイコンが取れなくても一覧は出す
                 pass
+            self.bodies = _bodies(board.statuses)
             return board
         self._run(work, self._loaded)
 
@@ -503,8 +714,11 @@ class App:
             keep = {self.rows[i].project.key for i in self.tree.selection() if i in self.rows}
         self._refresh_summary()
         rows = G.filter_rows(self.board.statuses, {s for s, v in self.chip_vars.items() if v.get()}, self.category,
-                             self.waiting_var.get(), self.conflict_var.get(), self.search_var.get(),
+                             self.waiting_var.get(), self.conflict_var.get(), "",
                              self.stale_var.get(), self.changed_var.get(), self.vuln_var.get())
+        q = query.parse(self.search_var.get())          # 「state:着手済 is:脆弱 -語」の書き方と、本文の検索
+        if q.terms:
+            rows = [ps for ps in rows if query.match(ps, q, self.bodies.get(ps.project.key) if q.needs_body else None)]
         if self.sort:
             rows = G.sort_rows(rows, *self.sort)
         self.tree.delete(*self.tree.get_children())
@@ -541,6 +755,14 @@ class App:
         if sel:
             self.tree.see(sel[0])
         self.on_select()
+
+    def _refresh_views(self) -> None:
+        """表以外の表示(カード・概要)を、今の絞り込みと選択に合わせる。見えている物だけ描く。"""
+        view = self.view_var.get()
+        if view == "cards":
+            self.cards.refresh(list(self.rows.values()), self.selected_keys())
+        elif view == "dashboard" and self.board:
+            self.dash.refresh([ps for ps in self.board.statuses if G.in_category(ps, self.category)])
 
     def _icon(self, key: str, size: int) -> tk.PhotoImage | None:
         path = self.icon_paths.get(key, {}).get(size)
@@ -660,12 +882,45 @@ class App:
     def on_select(self) -> None:
         self._show_detail()
         self._update_edit()
+        self._refresh_views()
+
+    def _show_diff(self, ps: ProjectStatus | None) -> None:
+        """「仕様の差分」タブ: 記録した時点の写しと今の仕様書の差分を色付きで出す。"""
+        t = self.d_diff
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        self.diff_prompt = ""
+        if ps is not None:
+            try:
+                d = snapshots.diff(ps)
+            except OSError:
+                d = None
+            if d is None:
+                t.insert("end", S.DIFF_NONE)
+            elif not d:
+                t.insert("end", S.DIFF_SAME)
+            else:
+                for path, lines in d:
+                    t.insert("end", path + "\n", "hunk")
+                    for ln in lines:
+                        tag = "hunk" if ln.startswith(("@@", "---", "+++")) else "add" if ln.startswith("+") \
+                            else "del" if ln.startswith("-") else ""
+                        t.insert("end", ln + "\n", tag)
+                self.diff_prompt = snapshots.diff_prompt(ps)
+        t.configure(state="disabled")
+        self.diff_copy.configure(state="normal" if self.diff_prompt else "disabled")
+
+    def copy_diff(self) -> None:
+        sel = self.selected()
+        if self.diff_prompt and sel:
+            self.copy_text(self.diff_prompt, sel[0].project.name)
 
     def _show_detail(self) -> None:
         sel = self.selected() if self.board else []
         for lb in (self.d_docs, self.d_impl, self.d_ev, self.d_hist):
             lb.delete(0, "end")
         self.d_impl_paths = []
+        self._show_diff(sel[0] if len(sel) == 1 else None)
         if len(sel) != 1:
             self.d_name.configure(text=S.DETAIL_MULTI.format(n=len(sel)) if sel else S.DETAIL_NONE, image="")
             self.d_badge.pack_forget()
@@ -761,11 +1016,69 @@ class App:
         if len(sel) != 1 or not self.board:
             return
         template = self.board.config.get("gui", {}).get("copy_template") or S.DEFAULT_COPY_TEMPLATE
+        self.copy_text(G.copy_text(template, sel[0]), sel[0].project.name)
+
+    # ---------- 部品(概要・カード・右クリック・キー)から呼ぶ口 ----------
+    def copy_text(self, text: str, name: str = "") -> None:
         self.root.clipboard_clear()
-        self.root.clipboard_append(G.copy_text(template, sel[0]))
+        self.root.clipboard_append(text)
         before = self.gen_lbl.cget("text")
-        self.gen_lbl.configure(text=S.COPIED.format(name=sel[0].project.name))
+        self.gen_lbl.configure(text=S.COPIED.format(name=name or text.splitlines()[0][:30]))
         self.root.after(3000, lambda: self.gen_lbl.configure(text=before))
+
+    def icon(self, key: str, size: int) -> tk.PhotoImage | None:
+        return self._icon(key, size)
+
+    def selected_keys(self) -> set[str]:
+        return {ps.project.key for ps in self.selected()}
+
+    def select_keys(self, keys: list[str]) -> None:
+        """その行を選ぶ。今の絞り込みで見えていなければ、絞り込みを外してから選ぶ。"""
+        want = set(keys)
+        if not want <= {ps.project.key for ps in self.rows.values()}:
+            self.clear_filters()
+        iids = [i for i, ps in self.rows.items() if ps.project.key in want]
+        self.tree.selection_set(iids)
+        if iids:
+            self.tree.see(iids[0])
+        self.on_select()
+
+    def open_ps(self, ps: ProjectStatus) -> None:
+        open_in_obsidian(self.root, ps.project.primary_doc.abs_path)
+
+    def open_impl_of(self, ps: ProjectStatus) -> None:
+        for p in history.impl_dirs(ps):
+            if os.path.isdir(p):
+                try:
+                    os.startfile(os.path.normpath(p))
+                except OSError as ex:
+                    messagebox.showerror(S.WRITE_FAILED_TITLE, S.EXPLORER_FAILED.format(path=p, err=ex), parent=self.root)
+                return
+
+    def set_state(self, ps_list: list[ProjectStatus], state: str) -> None:
+        self._quick_write(ps_list, {"state": state})
+
+    def set_waiting(self, ps_list: list[ProjectStatus], waiting: str) -> None:
+        self._quick_write(ps_list, {"waiting": waiting})
+
+    def _quick_write(self, ps_list: list[ProjectStatus], fields: dict) -> None:
+        """右クリックとキーからの記録。2件以上は確かめてから。取り消しは [記録する] と同じ。"""
+        if not ps_list or self.busy or not self.board:
+            return
+        answer = True
+        if len(ps_list) > 1:
+            answer = messagebox.askyesno(S.CONFIRM_TITLE, G.confirm_text(len(ps_list), fields), parent=self.root)
+        plan = G.bulk_plan(ps_list, fields, answer)
+        if plan:
+            self._write(plan, push_undo=True)
+
+    def focus_search(self) -> None:
+        self.search.focus_set()
+        self.search.select_range(0, "end")
+
+    def focus_note(self) -> None:
+        if len(self.selected()) == 1:
+            self.e_note.focus_set()
 
     # ---------- 記録 ----------
     def record(self) -> None:
@@ -866,6 +1179,21 @@ class App:
         self.e_wait.set(S.NO_CHANGE)
         for w in (self.e_done, self.e_last, self.e_note):
             w.delete(0, "end")
+
+
+def _bodies(statuses: list[ProjectStatus]) -> dict[str, str]:
+    """検索の素の語を仕様書の本文にも当てるため、プロジェクトごとに仕様書の文書を読んでおく(読めない物は飛ばす)。"""
+    out = {}
+    for ps in statuses:
+        parts = []
+        for d in ps.project.spec_docs:
+            try:
+                with open(d.abs_path, encoding="utf-8", errors="replace") as f:
+                    parts.append(f.read())
+            except OSError:
+                pass
+        out[ps.project.key] = "\n".join(parts)
+    return out
 
 
 def _dpi_scale(root: tk.Tk) -> float:

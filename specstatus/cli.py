@@ -1,4 +1,4 @@
-# CLI のサブコマンド(list / show / where / mark / build / check / weekly / update / shortcut / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
+# CLI のサブコマンド(list / show / where / mark / build / check / weekly / next / diff / notify / schedule / update / shortcut / gui)の引数を読み、core を呼んで結果を出す(§9.1)。
 # 書き込みは mark と build が core 経由で行うだけ。終了コードは §9.7。
 from __future__ import annotations
 
@@ -71,6 +71,16 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("shortcut", parents=[common])
     p.add_argument("--exe", help="exe を開くショートカットにする(無ければ pythonw で specstatus.py gui)")
+
+    p = sub.add_parser("next", parents=[common])
+    p.add_argument("--limit", type=int, default=5)
+
+    p = sub.add_parser("diff", parents=[common])
+    p.add_argument("target")
+    p.add_argument("--prompt", action="store_true", help="Claude Code に渡す文の形で出す")
+
+    from . import schedule
+    schedule.add_commands(sub, common)
 
     for name in ("build", "check", "gui"):
         sub.add_parser(name, parents=[common])
@@ -229,6 +239,9 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
         return code
     if a.cmd == "update":
         return _update(vault, a.check)
+    if a.cmd in ("notify", "schedule"):
+        from . import schedule
+        return schedule.run(a, vault)
     if a.cmd == "shortcut":
         from . import shortcut
         try:
@@ -296,6 +309,35 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
             _out(ln)
         _out(f"問題 {len(lines)} 件")
         return 1 if lines else read_code
+
+    if a.cmd == "next":
+        from . import recommend
+        picks = recommend.recommend(board.statuses, date.today(), a.limit)
+        for ps, score, reasons in picks:
+            _out(f"{score:>4}  {ps.project.name}  ({ps.state})  {'・'.join(reasons)}")
+        if not picks:
+            _out("今すぐ手を付けるべき物はありません。")
+        return read_code
+
+    if a.cmd == "diff":
+        from . import snapshots
+        ps, cands = core.resolve_target(board, a.target)
+        if ps is None:
+            _candidates(cands)
+            return 4
+        if a.prompt:
+            _out(snapshots.diff_prompt(ps) or "記録した時点から仕様書は変わっていません。")
+            return read_code
+        d = snapshots.diff(ps)
+        if d is None:
+            _out("記録した時点の仕様書の写しがありません(次に記録したときから比べられます)。")
+        elif not d:
+            _out("記録した時点から仕様書は変わっていません。")
+        for path, lines in d or []:
+            _out(f"--- {path}")
+            for ln in lines:
+                _out(ln)
+        return read_code
 
     if a.cmd == "weekly":
         day = a.date or date.today()

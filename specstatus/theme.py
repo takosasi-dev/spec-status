@@ -137,6 +137,16 @@ def apply(root: tk.Tk, p: dict, font: tuple, bold: tuple, scale: float) -> None:
         ("Checkbutton.padding", {"sticky": "nswe", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})])
     st.map("Chip.TCheckbutton", background=[("selected", p["select"]), ("active", p["panel2"])],
            foreground=[("selected", p["select_fg"]), ("disabled", p["muted"])])
+    # 表示の切り替え(表・カード・概要)は札と同じ見た目のラジオボタン
+    st.configure("Chip.TRadiobutton", background=p["panel"], foreground=p["fg"], padding=(px(10), px(3)),
+                 bordercolor=p["line"], relief="flat", font=font)
+    st.layout("Chip.TRadiobutton", [("Radiobutton.border", {"sticky": "nswe", "children": [
+        ("Radiobutton.padding", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})]})])
+    st.map("Chip.TRadiobutton", background=[("selected", p["accent"]), ("active", p["panel2"])],
+           foreground=[("selected", p["accent_fg"])])
+    st.configure("TMenubutton", background=p["panel2"], foreground=p["fg"], bordercolor=p["line"],
+                 lightcolor=p["panel2"], darkcolor=p["panel2"], arrowcolor=p["fg"], padding=(px(10), px(4)))
+    st.map("TMenubutton", background=[("active", p["select"])])
     st.configure("TEntry", fieldbackground=p["panel"], foreground=p["fg"], bordercolor=p["line"],
                  lightcolor=p["panel"], darkcolor=p["panel"], padding=px(3))
     st.map("TEntry", fieldbackground=[("disabled", p["bg"])], bordercolor=[("focus", p["accent"])],

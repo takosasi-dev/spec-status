@@ -130,6 +130,11 @@ def vulns_text(ps: ProjectStatus) -> str:
         return "-"
     if not v["count"]:
         return S.VULNS_NONE.format(total=v["total"])
+    details = v.get("details") or []
+    if details:     # 一番重い物の直し方を1つだけ(全部は一覧ノートと show に出る)
+        d = details[0]
+        fix = S.VULNS_FIX.format(package=d["package"], version=d["version"], fixed=d.get("fixed") or "?")
+        return S.VULNS_TEXT_FIX.format(count=v["count"], total=v["total"], worst=v.get("worst") or "不明", fix=fix)
     names = ", ".join(p.split("(", 1)[0] for p in v["packages"][:2])     # 詳細の欄に収まるよう ID は省く(一覧ノートと show に出る)
     return S.VULNS_TEXT.format(count=v["count"], total=v["total"], packages=names)
 

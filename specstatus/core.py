@@ -7,7 +7,7 @@ import os
 import time
 from datetime import date, datetime, timedelta
 
-from . import github, history, osv, records
+from . import github, history, osv, records, snapshots
 from .config import ConfigError, events_dir, load_config, load_registry, pc_name
 from .decide import decide
 from .find import find_docs
@@ -91,6 +91,10 @@ def load(vault: str, config_path: str | None) -> Board:
     statuses.sort(key=board_order)
     history.mark_stale(statuses, date.today(), cfg.get("board", {}).get("stale_days", STALE_DAYS))
     history.mark_spec_changed(statuses)
+    try:
+        snapshots.ensure_baseline(statuses)
+    except OSError:
+        pass
     github_note = github.attach(statuses, cfg)
     osv_note = osv.attach(statuses, cfg)
     os_dirs = sorted((n for n in os.listdir(spec_root) if os.path.isdir(os.path.join(spec_root, n))), key=fold)
@@ -240,7 +244,13 @@ def write_mark(board: Board, ps: ProjectStatus, fields: dict, by: str, doc: Doc 
         code = records.append(events_dir(board.vault), board.pc_name, line)
     except OSError as e:
         return 2, f"記録ファイルに書けません: {e}"
-    return (6, "ロックが取れませんでした(別の mark が書いています)") if code == 6 else (0, "")
+    if code == 6:
+        return 6, "ロックが取れませんでした(別の mark が書いています)"
+    try:
+        snapshots.save(ps)          # 記録した時点の仕様書を控える(後で「何が変わったか」を出すため)
+    except OSError:
+        pass
+    return 0, ""
 
 
 # ---- build ----------------------------------------------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
+from . import recommend
 from .history import series, state_at, week_range
 from .model import STATES, Board, Evidence, ProjectStatus
 from .textutil import fold
@@ -59,6 +60,13 @@ def badges(gh: dict) -> str:
     base = "https://img.shields.io/github"
     return (f"![版]({base}/v/release/{gh['repo']}?include_prereleases&label=) "
             f"![CI]({base}/checks-status/{gh['repo']}/{gh.get('branch') or 'main'}?label=)")
+
+
+def fix_text(v: dict, limit: int = 3) -> str:
+    """脆弱な依存の直し方「requests 2.19.0 → 2.20.0(高)」。直る版が分からない物は「→ ?」。"""
+    rows = [f"{d['package']} {d['version']} → {d.get('fixed') or '?'}({d.get('severity') or '不明'})"
+            for d in (v.get("details") or [])[:limit]]
+    return " / ".join(rows) or " / ".join(v.get("packages", [])[:limit])
 
 
 def ac_text(ps: ProjectStatus) -> str:
@@ -162,6 +170,7 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     ]
     out += [f"| {s} | {sum(1 for p in st if p.state == s)} |" for s in STATES]
     out += progress_section(st, today, board.config.get("board", {}).get("progress_weeks", PROGRESS_WEEKS))
+    out += [""] + recommend.section(st, today, link)
 
     turn = sorted((p for p in st if p.waiting in WAITING_TURN),
                   key=lambda p: (p.folded.last_record.at if p.folded.last_record else "", board_order(p)))
@@ -189,9 +198,9 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
                 "実装フォルダのロックファイルの依存を OSV.dev で調べ、既知の脆弱性がある物。", ""]
         if board.osv_note:
             out += [cell(board.osv_note), ""]
-        out += ["| プロジェクト | 脆弱な依存 | 調べた依存 | 例 |", "|---|---|---|---|"]
-        out += [f"| {link(p)} | {p.vulns['count']} | {p.vulns['total']} | "
-                f"{cell(' / '.join(p.vulns['packages'][:3]))} |" for p in vul]
+        out += ["| プロジェクト | 脆弱な依存 | 一番重い | 直し方(上げる先) | 調べた依存 |", "|---|---|---|---|---|"]
+        out += [f"| {link(p)} | {p.vulns['count']} | {p.vulns.get('worst') or '-'} | "
+                f"{cell(fix_text(p.vulns))} | {p.vulns['total']} |" for p in vul]
 
     days = board.config.get("board", {}).get("recent_days", 7)
     limit = board.config.get("board", {}).get("recent_max", 20)

@@ -81,3 +81,41 @@ def where(board: Board, folder: str) -> list[ProjectStatus]
 - `github.py`: `attach(statuses, cfg, now=None, fetch=http_get, path=None) -> str`(`ps.github` を付け、止めた理由を返す。`[github] owner` が空なら何もしない)。
 - `core.load` が両方を呼ぶ。`core.write_weekly(board, day) -> パス`、`render.weekly_markdown(board, day, today, dup_stems)`、`render.github_text(gh)`。
 - テストは `tests/test_timeline.py`(git と通信は差し替える)。
+
+## 6. v0.6.0 の並列作業(2026-10-09)
+
+共通の決まり(1〜4 章に加えて)
+- **既存のファイルは、各担当の「触ってよい」に書いた物だけ直す。** `gui.py`・`cli.py`・`core.py`・`render.py`・`model.py`・`strings.py`・`guilogic.py`・`theme.py` は本体(統合役)だけが直す。各担当は新しいファイルに関数・部品を作り、本体が配線する。
+- 画面の文言は各担当のモジュールの先頭に定数でまとめてよい。
+- 通信・git・PowerShell・schtasks は引数で差し替えられるようにし、テストでは本物を呼ばない。窓を出すテストは書かない(純関数を分けて確かめる)。`python -m pytest -q` が全部通ること。
+- 保存は `%LOCALAPPDATA%\SpecStatus\` の下(vault には書かない)。場所は引数 `folder` で差し替えられるように。
+- 型は `model.py` の `ProjectStatus` をそのまま使う。持っている物: `project`(`name`・`key`・`spec_dir`・`docs`・`spec_docs`・`primary_doc`)、`state`、`waiting`、`folded`(`note`・`impl`・`history`・`last_record`)、`done_phase`・`last_phase`、`conflict`、`last_devlog_date`、`github`(dict か None)、`last_activity`・`stale_days`、`spec_changed`、`vulns`(dict か None)、`ac`((済, 全部) か None)。テストで ProjectStatus を作るときは `tests/test_guilogic.py` の `ps()` と `rec()` を使う。
+
+### 担当 A: おすすめ・仕様書の差分・脆弱性の直し先
+- `specstatus/recommend.py`: `recommend(statuses, today: date, limit: int = 5) -> list[tuple[ProjectStatus, int, list[str]]]`(点数の高い順。理由は短い日本語)、`section(statuses, today, link) -> list[str]`(一覧ノートの「## 今日のおすすめ(n)」の行。`link(ps)` はリンクの文字を返す関数)。
+  - 点の付け方(仮決め): 確認待ち・実物待ち、脆弱な依存(数と深刻度)、仕様が変わった、止まっている(日数)、一部未実装、着手済で AC が進んでいる、などを足す。実装完了で何も無い物・撤退・証拠なしは出さない。重みはモジュールの先頭の定数に。
+- `specstatus/snapshots.py`: 記録した時点の仕様書の写しを置いて差分を出す。`save(ps, folder=None)`(今の仕様書の文書を写す)、`ensure_baseline(statuses, folder=None)`(記録があり、仕様が変わっていなくて、写しが無い物だけ今の内容を写す)、`diff(ps, folder=None) -> list[tuple[str, list[str]]] | None`(文書の vault からのパスと unified diff の行。写しが無ければ None)、`diff_prompt(ps, folder=None) -> str`(Claude Code に「仕様書のこの差分を実装して」と渡す文。差分そのものを含める)。写しのキーは文書の `path`。
+- `specstatus/osv.py` を拡張(触ってよい): `ps.vulns` に `"details": [{"package", "version", "ids", "severity", "fixed"}]`(深刻度の重い順)と `"worst"`(一番重い深刻度)を足す。深刻度と直る版は `GET https://api.osv.dev/v1/vulns/{id}`(登録不要)から取り、ID ごとに7日残す。直る版は、今の版と同じ先頭の数字の `fixed` を優先し、複数の脆弱性があれば一番大きい版。既存の `tests/test_checks.py` は通ったままにする。
+- テスト: `tests/test_recommend.py`・`tests/test_snapshots.py`・`tests/test_osv_details.py`。
+
+### 担当 B: 朝の知らせと週のまとめの自動化
+- `specstatus/schedule.py`:
+  - `notify_summary(board, state_path=None) -> tuple[str, str] | None`(題と本文。前回から増えた物(確認待ち・脆弱な依存・仕様が変わった物)と今の件数。何も無ければ None。前回の状態は `state_path` の JSON に書く)。
+  - `toast(title, body, runner=None)`(Windows の通知。PowerShell の WinRT の ToastNotificationManager。AppUserModelID は "takosasi.SpecStatus" を試し、出せなければ PowerShell の ID に落とす)。
+  - `install(vault, python=None, config=None, runner=None) -> list[str]`(schtasks で「SpecStatus 朝の知らせ」毎日 9:00 に `notify`、「SpecStatus 週のまとめ」毎週金曜 18:00 に `weekly --write`。pythonw で窓を出さない。同名は上書き)、`remove(runner=None) -> list[str]`、`status(runner=None) -> list[str]`。
+  - CLI の配線用: `add_commands(sub, common)`(`notify` と `schedule {install,remove,status}` の subparser を足す)と `run(args, vault) -> int`。本体が cli.py から呼ぶ。
+- テスト: `tests/test_schedule.py`(runner を差し替えて、組み立てたコマンドと PowerShell の文を確かめる)。
+
+### 担当 C: 概要の画面とカード表示
+- `specstatus/dashboard.py`: `class DashboardView(ttk.Frame)`。`__init__(self, parent, app)`、`refresh(self, statuses: list[ProjectStatus]) -> None`(今の分類の範囲の全件)。中身: 状態のドーナツ(状態の色)、分類ごとの完了率の横棒(上位10)、大きい推移の折れ線(`history.series`)、今週動いた物、今日のおすすめ(`recommend.recommend`。担当 A と並行なので try で import し、無ければ空として動く)。項目をクリックしたら `app.select_keys([key])`。
+- `specstatus/cards.py`: `class CardView(ttk.Frame)`。`__init__(self, parent, app)`、`refresh(self, rows: list[ProjectStatus], selected: set[str]) -> None`。Canvas に縦スクロールのタイル: 大きいアイコン(`app.icon(key, size)`)・名前・状態の色の帯・Phase の進みの棒・待ち/脆弱性/止まり/仕様変更の小さな印。クリックで `app.select_keys([key])`、Ctrl クリックで足す、ダブルクリックで `app.open_ps(ps)`、右クリックで `app.context_menu(event, [ps])`。窓の幅で列の数を変える。
+- 本体が用意する `app` の物(これ以外は使わない): `app.p`(色の辞書。`bg`・`panel`・`panel2`・`fg`・`muted`・`line`・`accent`・`accent_fg`・`select`・`select_fg`・`error`・`stripe`・`states`(状態→色)・`dark`)、`app.px(v)`(96dpi 基準→画面)、`app.font`・`app.bold`(タプル)、`app.root`、`app.board`、`app.icon(key, size) -> tk.PhotoImage | None`、`app.select_keys(keys: list[str])`、`app.selected_keys() -> set[str]`、`app.open_ps(ps)`、`app.context_menu(event, ps_list)`。
+- テスト: 窓を出さない純関数(タイルの配置の計算・ドーナツの角度・分類ごとの完了率など)を分けて `tests/test_views.py` で確かめる。
+
+### 担当 D: 細かい UI(設定の保存・ツールチップ・右クリックとキー・検索・書き出し)
+- `specstatus/prefs.py`: `load(folder=None) -> dict`・`save(prefs, folder=None)`(`gui.json`。壊れていたら既定)。`DEFAULTS` を持つ: 窓の大きさと位置(`geometry`)、仕切りの位置(`sashes`)、分類、状態の札、チェック(待ち・食い違い・止まり・変更・脆弱)、並べ替え、表示(`view`: "table"・"cards"・"dashboard")、詳細のタブ、テーマ("auto"・"light"・"dark")、文字の大きさの差(`font_delta`: -2〜+6)、隠す列(`hidden_columns`)。
+- `specstatus/tooltip.py`: `class TreeTooltip`(`__init__(self, widget, text_for_event, app)`。マウスが止まって 500ms で小窓、動いたり離れたら消す。`text_for_event(event) -> str | None`)。`tooltip_text(ps) -> str`(名前の全文・状態・待ち・メモ全文・脆弱性・仕様の更新・AC。純関数)。
+- `specstatus/actions.py`: 右クリックのメニューとキー操作。`build_menu(app, ps_list) -> tk.Menu`(Obsidian で開く・実装フォルダを開く・GitHub を開く・状態を変える(下の段)・待ちを変える・指示文をコピー・差分の指示文をコピー(`snapshots.diff_prompt` が import できて写しがあれば))、`bind_keys(app)`(1〜5 で状態、W で待ちを順に、/ で検索、Enter で開く、F2 でメモ、? でキーの一覧の小窓)。キーは検索欄やメモ欄に文字を打っている間は効かせない。本体が用意する `app` の物は担当 C と同じ+ `app.set_state(ps_list, state)`・`app.set_waiting(ps_list, waiting)`・`app.copy_text(text)`・`app.focus_search()`・`app.focus_note()`・`app.selected() -> list[ProjectStatus]`・`app.open_primary()`・`app.open_impl_of(ps)`。
+- `specstatus/query.py`: 検索の書き方。`parse(text) -> Query`、`match(ps, q, body: str | None = None) -> bool`。`state:着手済`(`状態:`)・`waiting:確認待ち`(`待ち:`)・`cat:Windows`(`分類:`)・`is:vuln`/`is:stale`/`is:changed`/`is:conflict`(日本語 `is:脆弱`/`is:止まり`/`is:変更`/`is:食い違い` も)・`has:github`/`has:note`・`-語`(含まない)・`"空白を含む語"`。素の語は名前・仕様書フォルダ・メモ・実装フォルダのパス・(body があれば)仕様書の本文に当てる。大文字小文字・全角半角は `textutil.fold`。
+- `specstatus/export.py`: `to_csv(rows) -> str`(列は表と同じ+メモ・AC・脆弱性。書く側で utf-8-sig)、`capture_png(widget, path)`(Windows の PrintWindow で部品の範囲を撮って `pngutil.encode` で書く)。
+- テスト: `tests/test_prefs.py`・`tests/test_query.py`・`tests/test_export.py`・`tests/test_tooltip.py`(純関数だけ)。
