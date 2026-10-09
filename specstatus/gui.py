@@ -147,9 +147,9 @@ class App:
                         command=self.refresh_table).pack(side="left", padx=px(4))
         ttk.Checkbutton(tools, text=S.CONFLICT_ONLY, variable=self.conflict_var,
                         command=self.refresh_table).pack(side="left", padx=px(4))
-        self.stale_var = tk.BooleanVar()
-        ttk.Checkbutton(tools, text=S.STALE_ONLY, variable=self.stale_var,
-                        command=self.refresh_table).pack(side="left", padx=px(4))
+        self.stale_var, self.changed_var, self.vuln_var = tk.BooleanVar(), tk.BooleanVar(), tk.BooleanVar()
+        for text, var in ((S.STALE_ONLY, self.stale_var), (S.CHANGED_ONLY, self.changed_var), (S.VULN_ONLY, self.vuln_var)):
+            ttk.Checkbutton(tools, text=text, variable=var, command=self.refresh_table).pack(side="left", padx=px(4))
         self.count_lbl = ttk.Label(tools, text="", style="Muted.TLabel")
         self.count_lbl.pack(side="right")
 
@@ -185,6 +185,8 @@ class App:
         self.tree.tag_configure("none", foreground=p["muted"])
         self.tree.tag_configure("conflict", foreground=p["error"])
         self.tree.tag_configure("stale", foreground=p["states"]["一部未実装"])
+        self.tree.tag_configure("changed", foreground=p["states"]["着手済"])
+        self.tree.tag_configure("vuln", foreground=p["states"]["撤退"])
         ys = ttk.Scrollbar(self.table, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=ys.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -483,7 +485,7 @@ class App:
         self._refresh_summary()
         rows = G.filter_rows(self.board.statuses, {s for s, v in self.chip_vars.items() if v.get()}, self.category,
                              self.waiting_var.get(), self.conflict_var.get(), self.search_var.get(),
-                             self.stale_var.get())
+                             self.stale_var.get(), self.changed_var.get(), self.vuln_var.get())
         if self.sort:
             rows = G.sort_rows(rows, *self.sort)
         self.tree.delete(*self.tree.get_children())
@@ -498,8 +500,12 @@ class App:
                 tags.append("conflict")
             elif ps.state == "証拠なし":
                 tags.append("none")
+            elif ps.vulns and ps.vulns["count"]:
+                tags.append("vuln")
             elif ps.stale_days:
                 tags.append("stale")
+            elif ps.spec_changed:
+                tags.append("changed")
             self.tree.insert("", "end", iid=iid, text=vals[0], image=self.dots.get(ps.state, ""), values=vals[1:],
                              tags=tags)
             if ps.project.key in keep:
@@ -526,7 +532,8 @@ class App:
             v.set(False)
         self.waiting_var.set(False)
         self.conflict_var.set(False)
-        self.stale_var.set(False)
+        for v in (self.stale_var, self.changed_var, self.vuln_var):
+            v.set(False)
         self.search_var.set("")
         self.category = None
         if self.side.exists("__all__"):
@@ -631,12 +638,13 @@ class App:
         self.d_badge.pack(anchor="w", pady=(self.px(6), self.px(10)), before=self.d_grid)
         info = {"source": G.source_text(ps), "where": ps.decided_by.get("path") or "-",
                 "spec_dir": ps.project.spec_dir, "phase": G.phase_text(ps), "waiting": ps.waiting,
-                "note": ps.folded.note or "-", "activity": G.activity_text(ps), "github": G.github_detail(ps)}
+                "note": ps.folded.note or "-", "activity": G.activity_text(ps), "github": G.github_detail(ps),
+                "changed": G.changed_text(ps), "ac": G.ac_detail(ps), "vulns": G.vulns_text(ps)}
         self.d_github_url = (ps.github or {}).get("url") or ""
         self.d_info["github"].configure(cursor="hand2" if self.d_github_url else "")
         for k, v in self.d_info.items():
             v.configure(text=info[k])
-            if k in ("activity", "github"):         # 無いときは行ごと隠して、下の欄に場所を譲る
+            if k in S.DETAIL_HIDE_EMPTY:            # 無いときは行ごと隠して、下の欄に場所を譲る
                 for w in (v, self.d_labels[k]):
                     w.grid() if info[k] != "-" else w.grid_remove()
         for doc in ps.project.docs:

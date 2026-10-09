@@ -1,15 +1,17 @@
-# 時間の流れを見る: ある日の状態の復元・週ごとの推移・止まっている物(最後に動いた日)・週の範囲。
+# 時間の流れを見る: ある日の状態の復元・週ごとの推移・止まっている物(最後に動いた日)・仕様書の書き換え・週の範囲。
 # 状態の復元は記録(history)だけを使い、記録の無い時期は記録以外の証拠の状態とみなす(日付の無い証拠のため近似)。
 from __future__ import annotations
 
 import os
 import subprocess
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .model import ProjectStatus
 
 DOING = ("着手済", "一部未実装")
+BUILT = ("実装完了", "一部未実装")      # 仕様書の書き換えを見る状態
+CHANGE_GRACE_S = 60                     # 記録と同じ作業で仕様書を直した分は数えない
 GIT_TIMEOUT_S = 5
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # 窓の exe から呼んでも黒い窓を出さない
 
@@ -68,6 +70,25 @@ def impl_dirs(ps: ProjectStatus) -> list[str]:
     if ps.decided_by["source"] == "implroot":
         paths.append(ps.decided_by["value"])
     return list(dict.fromkeys(paths))
+
+
+def mark_spec_changed(statuses: list[ProjectStatus], mtime: Callable[[str], float] = os.path.getmtime) -> None:
+    """実装完了・一部未実装で、最後の記録より後に仕様書(付属を除く)が書き換えられていれば、その日を spec_changed に入れる。
+    記録をもう1行足す(状態を付け直す・待ちを変える等)と消える。"""
+    for ps in statuses:
+        r = ps.folded.last_record
+        if ps.state not in BUILT or r is None:
+            continue
+        since = datetime.fromisoformat(r.at).timestamp() + CHANGE_GRACE_S
+        times = []
+        for d in ps.project.spec_docs:
+            try:
+                times.append(mtime(d.abs_path))
+            except OSError:
+                pass
+        newest = max(times, default=0.0)
+        if newest > since:
+            ps.spec_changed = datetime.fromtimestamp(newest).date().isoformat()
 
 
 def mark_stale(statuses: list[ProjectStatus], today: date, stale_days: int,

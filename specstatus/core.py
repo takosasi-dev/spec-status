@@ -7,7 +7,7 @@ import os
 import time
 from datetime import date, datetime, timedelta
 
-from . import github, history, records
+from . import github, history, osv, records
 from .config import ConfigError, events_dir, load_config, load_registry, pc_name
 from .decide import decide
 from .find import find_docs
@@ -90,7 +90,9 @@ def load(vault: str, config_path: str | None) -> Board:
     statuses = [decide(p, records.fold(bound.get(p.key, [])), found.get(p.key, {})) for p in projects]
     statuses.sort(key=board_order)
     history.mark_stale(statuses, date.today(), cfg.get("board", {}).get("stale_days", STALE_DAYS))
+    history.mark_spec_changed(statuses)
     github_note = github.attach(statuses, cfg)
+    osv_note = osv.attach(statuses, cfg)
     os_dirs = sorted((n for n in os.listdir(spec_root) if os.path.isdir(os.path.join(spec_root, n))), key=fold)
     board = Board(
         vault=vault, pc_name=pc_name(cfg), config=cfg, docs=docs, statuses=statuses,
@@ -98,6 +100,7 @@ def load(vault: str, config_path: str | None) -> Board:
         record_problems=problems, orphans=orphans, folders_without_specs=no_spec,
         registry_issues=issues + merge_issues + rename_issues, record_count=len(recs),
         os_dirs=[nfc(n) for n in os_dirs], reader_failed=bool(ev_unreadable), github_note=github_note,
+        osv_note=osv_note,
     )
     output_paths(board)          # 出力先が許可外なら GUI のエラー表示にも出るよう、読む段で止める
     return board

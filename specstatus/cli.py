@@ -31,6 +31,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--waiting", action="store_true")
     p.add_argument("--conflict", action="store_true")
     p.add_argument("--stale", action="store_true")
+    p.add_argument("--changed", action="store_true")
+    p.add_argument("--vuln", action="store_true")
     p.add_argument("--os")
     p.add_argument("--json", action="store_true")
 
@@ -113,6 +115,13 @@ def _show(board: Board, ps: ProjectStatus, n: int, as_json: bool) -> None:
     _out(f"開発ログの最新: {ps.last_devlog_date or '-'}")
     if ps.last_activity:
         _out(f"最後に動いた日: {ps.last_activity}" + (f"  ({ps.stale_days} 日止まっている)" if ps.stale_days else ""))
+    if ps.ac:
+        _out(f"受け入れ基準: {render.ac_text(ps)} にチェック")
+    if ps.spec_changed:
+        _out(f"仕様書の更新: {ps.spec_changed}(最後の記録より後)")
+    if ps.vulns:
+        v = ps.vulns
+        _out(f"依存の脆弱性: {v['count']} / {v['total']} 件  " + " / ".join(v["packages"]))
     if ps.github:
         g = ps.github
         _out(f"GitHub: {g['repo']}  版 {g['release'] or '-'}  最後の push {g['pushed_at']}  CI {g['ci'] or '-'}  {g['url']}")
@@ -225,8 +234,9 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
     read_code = 3 if board.reader_failed else 0
     if board.reader_failed:
         _err("読めなかった証拠: " + " / ".join(f"{u.reader}({u.reason})" for u in board.unreadable if u.reader != "find"))
-    if board.github_note:
-        _err(board.github_note)
+    for note in (board.github_note, board.osv_note):
+        if note:
+            _err(note)
 
     if a.cmd == "list":
         rows = board.statuses
@@ -238,6 +248,10 @@ def main(argv: list[str] | None = None, default_vault: str | None = None) -> int
             rows = [p for p in rows if p.conflict]
         if a.stale:
             rows = [p for p in rows if p.stale_days]
+        if a.changed:
+            rows = [p for p in rows if p.spec_changed]
+        if a.vuln:
+            rows = [p for p in rows if p.vulns and p.vulns["count"]]
         if a.os:
             rows = [p for p in rows if fold(render.os_dir(p)) == fold(a.os)]
         _out(json.dumps([render.project_json(p) for p in rows], ensure_ascii=False, indent=2) if a.json

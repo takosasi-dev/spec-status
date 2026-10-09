@@ -17,6 +17,8 @@ ROW_COUNT = "{n} 件を表示 / 全 {total} 件"
 WAITING_ONLY = "待ちだけ"
 CONFLICT_ONLY = "食い違いだけ"
 STALE_ONLY = "止まっている物だけ"
+CHANGED_ONLY = "仕様が変わった物だけ"
+VULN_ONLY = "脆弱性ありだけ"
 PROGRESS = "推移({weeks}週)"
 PROGRESS_TIP = "実装完了 {first} → {last}"
 RELOAD = "再読み込み"
@@ -64,8 +66,16 @@ DETAIL_FIELDS = (          # 詳細の表(キー → 見出し)
     ("waiting", "待ち"),
     ("note", "メモ"),
     ("activity", "最後に動いた日"),
+    ("changed", "仕様書の更新"),
+    ("ac", "受け入れ基準"),
+    ("vulns", "依存の脆弱性"),
     ("github", "GitHub"),
 )
+DETAIL_HIDE_EMPTY = ("activity", "changed", "ac", "vulns", "github")    # 値が無ければ行ごと隠す
+CHANGED_TEXT = "{date}(最後の記録より後)"
+AC_TEXT = "{done} / {total} にチェック"
+VULNS_TEXT = "{count} / {total} 件(例: {packages})"
+VULNS_NONE = "なし(依存 {total} 件)"
 STALE_TEXT = "{date}({days} 日止まっている)"
 GITHUB_TEXT = "{repo}\n{release} / push {pushed} / CI {ci}"
 DOCS = "文書(ダブルクリックで Obsidian)"

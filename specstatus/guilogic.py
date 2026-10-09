@@ -38,7 +38,8 @@ def category_tree(statuses: list[ProjectStatus]) -> list[tuple[str, str, str, in
 
 
 def filter_rows(statuses: list[ProjectStatus], states: set[str], category: str | None,
-                waiting_only: bool, conflict_only: bool, query: str, stale_only: bool = False) -> list[ProjectStatus]:
+                waiting_only: bool, conflict_only: bool, query: str, stale_only: bool = False,
+                changed_only: bool = False, vuln_only: bool = False) -> list[ProjectStatus]:
     """状態の札(どれか)・分類(仕様書フォルダの先頭)・待ち・食い違い・検索語・止まっている物で絞る。並びは保つ。"""
     q = fold(query.strip())
     out = []
@@ -52,6 +53,10 @@ def filter_rows(statuses: list[ProjectStatus], states: set[str], category: str |
         if conflict_only and not ps.conflict:
             continue
         if stale_only and not ps.stale_days:
+            continue
+        if changed_only and not ps.spec_changed:
+            continue
+        if vuln_only and not (ps.vulns and ps.vulns["count"]):
             continue
         if q and q not in fold(ps.project.name) and q not in fold(ps.project.spec_dir):
             continue
@@ -109,6 +114,24 @@ def activity_text(ps: ProjectStatus) -> str:
     if not ps.last_activity:
         return "-"
     return S.STALE_TEXT.format(date=ps.last_activity, days=ps.stale_days) if ps.stale_days else ps.last_activity
+
+
+def changed_text(ps: ProjectStatus) -> str:
+    return S.CHANGED_TEXT.format(date=ps.spec_changed) if ps.spec_changed else "-"
+
+
+def ac_detail(ps: ProjectStatus) -> str:
+    return S.AC_TEXT.format(done=ps.ac[0], total=ps.ac[1]) if ps.ac else "-"
+
+
+def vulns_text(ps: ProjectStatus) -> str:
+    v = ps.vulns
+    if not v:
+        return "-"
+    if not v["count"]:
+        return S.VULNS_NONE.format(total=v["total"])
+    names = ", ".join(p.split("(", 1)[0] for p in v["packages"][:2])     # 詳細の欄に収まるよう ID は省く(一覧ノートと show に出る)
+    return S.VULNS_TEXT.format(count=v["count"], total=v["total"], packages=names)
 
 
 def github_detail(ps: ProjectStatus) -> str:

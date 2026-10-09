@@ -13,6 +13,7 @@ KIND_WORDS = ("実装仕様書", "非機能要件定義書", "要件定義書", 
 VERSION_RE = re.compile(r"\s*v\d[\d.]*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PHASE_CELL_RE = re.compile(r"^\s*(\d{1,2})\s*$")
+AC_RE = re.compile(r"^\s*[-*] \[([ xX])\]\s*\**AC-\d+")     # 「- [ ] AC-3: …」「- [x] **AC-3**」
 H1_SCAN_LINES = 30
 
 
@@ -60,6 +61,12 @@ def last_phase(body: list[str]) -> int | None:
             if m:
                 nums.append(int(m.group(1)))
     return max(nums) if nums else None
+
+
+def ac_count(body: list[str]) -> tuple[int, int] | None:
+    """受け入れ基準のチェックボックス (チェック済み, 全部)。1つも無ければ None。"""
+    marks = [m.group(1) for m in map(AC_RE.match, body) if m]
+    return (sum(c in "xX" for c in marks), len(marks)) if marks else None
 
 
 def kind_of(stem: str, kinds: list[tuple[str, re.Pattern]]) -> str | None:
@@ -132,6 +139,7 @@ def find_docs(vault: str, cfg: dict, registry: dict):
                 created=created_date(fm),
                 last_phase=last_phase(body) if kind == "仕様書" else None,
                 spec_dir=rel_dir,
+                ac=ac_count(body),
             ))
             folder_has_spec[rel_dir] = True
 

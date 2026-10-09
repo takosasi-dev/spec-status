@@ -79,7 +79,7 @@ def test_github_match_and_refresh(tmp_path):
     lens = ps("RepoLens", "W/RepoLens", "実装完了")
     other = ps("Other", "W/Other", "未着手")
     repos = [{"name": "spec-status", "html_url": "https://github.com/o/spec-status", "pushed_at": "2026-10-09T12:00:00Z",
-              "default_branch": "main"},
+              "default_branch": "main", "open_issues_count": 3},
              {"name": "github-repo-lens", "html_url": "u", "pushed_at": "2026-10-08T01:00:00Z", "default_branch": "main"}]
     calls = []
 
@@ -98,9 +98,10 @@ def test_github_match_and_refresh(tmp_path):
     path = str(tmp_path / "c.json")
     assert github.attach([spec, lens, other], cfg, now=1000.0, fetch=fetch, path=path) == ""
     assert spec.github == {"repo": "o/spec-status", "url": "https://github.com/o/spec-status", "pushed_at": "2026-10-09",
-                           "release": "v0.1.0", "release_at": "2026-10-09", "ci": "失敗"}
+                           "release": "v0.1.0", "release_at": "2026-10-09", "ci": "失敗", "issues": 3, "branch": "main"}
     assert lens.github["ci"] is None and other.github is None
-    assert render.github_text(spec.github) == "v0.1.0 CI 失敗"
+    assert render.github_text(spec.github) == "v0.1.0 CI 失敗 Issue 3"
+    assert "checks-status/o/spec-status/main" in render.badges(spec.github)
     assert len(calls) == 5
 
     # 新しいうちは取りに行かない。古くなったら ETag 付きで聞き直す

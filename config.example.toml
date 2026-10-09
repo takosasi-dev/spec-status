@@ -65,5 +65,9 @@ refresh_hours = 6                                # これより古い結果だ�
 # 名前が英数字だけで一致しない物の結び方(プロジェクト名か仕様書フォルダ -> リポジトリ名。"" は結ばない)
 repos = {}
 
+[osv]
+enabled = false                                  # true で、実装フォルダの依存の既知の脆弱性を OSV.dev(登録不要・無料)で調べる
+refresh_hours = 24                               # 依存ごとに、これより古い結果だけ聞き直す
+
 [gui]
 copy_template = "次の仕様書を実装して。着手する前に SpecStatus の show で状態を確かめること。\n仕様書: {abs_path}"

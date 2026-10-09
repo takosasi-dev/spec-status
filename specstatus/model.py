@@ -22,6 +22,7 @@ class Doc:
     created: str | None       # FR-5 の YYYY-MM-DD
     last_phase: int | None    # FR-6(種類が「仕様書」の物だけ)
     spec_dir: str             # spec_root からの相対フォルダ。区切り '/'、NFC
+    ac: tuple[int, int] | None = None   # 受け入れ基準のチェック「- [x] AC-n」の (済, 全部)。無ければ None
 
 
 @dataclass
@@ -143,10 +144,18 @@ class ProjectStatus:
     github: dict | None = None          # github.attach が付ける {repo, url, pushed_at, release, release_at, ci}
     last_activity: str | None = None    # 最後に動いた日 YYYY-MM-DD(記録・開発ログ・実装フォルダの git の新しい方)
     stale_days: int | None = None       # 止まっている物なら、最後に動いてからの日数
+    spec_changed: str | None = None     # 実装完了・一部未実装の最後の記録より後に仕様書が書き換えられた日(YYYY-MM-DD)
+    vulns: dict | None = None           # osv.attach が付ける {count, total, packages, ids, lockfiles}
 
     @property
     def conflict(self) -> bool:
         return bool(self.conflicts)
+
+    @property
+    def ac(self) -> tuple[int, int] | None:
+        """仕様書の文書を合わせた受け入れ基準のチェック (済, 全部)。"""
+        acs = [d.ac for d in self.project.spec_docs if d.ac]
+        return (sum(a[0] for a in acs), sum(a[1] for a in acs)) if acs else None
 
     @property
     def done_phase(self) -> int | None:
@@ -178,3 +187,4 @@ class Board:
     os_dirs: list[str]                  # spec_root 直下のフォルダ名(GUI の OS の選択)
     reader_failed: bool = False         # 読み手のどれかが例外で落ちた(終了コード 3)
     github_note: str = ""               # GitHub を取りに行けなかった等の一言(終了コードには響かない)
+    osv_note: str = ""                  # OSV.dev を取りに行けなかった等の一言(同上)

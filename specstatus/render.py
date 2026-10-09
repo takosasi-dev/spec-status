@@ -50,7 +50,21 @@ def github_text(gh: dict | None) -> str:
     if not gh:
         return ""
     ci = f" CI {gh['ci']}" if gh.get("ci") and gh["ci"] != "成功" else ""
-    return (gh.get("release") or "公開") + ci
+    issues = f" Issue {gh['issues']}" if gh.get("issues") else ""
+    return (gh.get("release") or "公開") + ci + issues
+
+
+def badges(gh: dict) -> str:
+    """shields.io(登録不要)の版と CI のバッジ。Obsidian が開くたびに最新を描く。"""
+    base = "https://img.shields.io/github"
+    return (f"![版]({base}/v/release/{gh['repo']}?include_prereleases&label=) "
+            f"![CI]({base}/checks-status/{gh['repo']}/{gh.get('branch') or 'main'}?label=)")
+
+
+def ac_text(ps: ProjectStatus) -> str:
+    """受け入れ基準のチェック「済/全部」。チェックボックスが無ければ空。"""
+    a = ps.ac
+    return f"{a[0]}/{a[1]}" if a else ""
 
 
 def cell(s: str | None) -> str:
@@ -103,6 +117,9 @@ def project_json(ps: ProjectStatus) -> dict:
         "github": ps.github,
         "last_activity": ps.last_activity,
         "stale_days": ps.stale_days,
+        "spec_changed": ps.spec_changed,
+        "ac": {"checked": ps.ac[0], "total": ps.ac[1]} if ps.ac else None,
+        "vulns": ps.vulns,
     }
 
 
@@ -160,6 +177,22 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     out += [f"| {link(p)} | {p.state} | {p.waiting} | {p.last_activity} | {p.stale_days} | {cell(p.folded.note)} |"
             for p in stale]
 
+    changed = sorted((p for p in st if p.spec_changed), key=lambda p: (p.spec_changed, board_order(p)), reverse=True)
+    out += ["", f"## 仕様が変わった物({len(changed)})", "",
+            "実装完了・一部未実装と記録した後に、仕様書が書き換えられた物。確かめたら記録をもう1行足すと消える。", "",
+            "| プロジェクト | 状態 | 仕様書の更新 | 最後の記録 |", "|---|---|---|---|"]
+    out += [f"| {link(p)} | {p.state} | {p.spec_changed} | {cell(last_text(p))} |" for p in changed]
+
+    vul = sorted((p for p in st if p.vulns and p.vulns["count"]), key=lambda p: (-p.vulns["count"], board_order(p)))
+    if vul or board.osv_note or any(p.vulns for p in st):
+        out += ["", f"## 依存の脆弱性({len(vul)})", "",
+                "実装フォルダのロックファイルの依存を OSV.dev で調べ、既知の脆弱性がある物。", ""]
+        if board.osv_note:
+            out += [cell(board.osv_note), ""]
+        out += ["| プロジェクト | 脆弱な依存 | 調べた依存 | 例 |", "|---|---|---|---|"]
+        out += [f"| {link(p)} | {p.vulns['count']} | {p.vulns['total']} | "
+                f"{cell(' / '.join(p.vulns['packages'][:3]))} |" for p in vul]
+
     days = board.config.get("board", {}).get("recent_days", 7)
     limit = board.config.get("board", {}).get("recent_max", 20)
     since = (today - timedelta(days=days - 1)).isoformat()
@@ -173,19 +206,22 @@ def board_markdown(board: Board, generated: str, today: date, dup_stems: set[str
     for s in STATES:
         rows = [p for p in st if p.state == s]
         out += ["", f"## {s}({len(rows)})", "",
-                "| プロジェクト | 仕様書フォルダ | Phase | 根拠 | 最後の記録 | 開発ログ | メモ |",
-                "|---|---|---|---|---|---|---|"]
-        out += [f"| {link(p)} | {cell(p.project.spec_dir)} | {phase_text(p)} | {cell(source_text(p.decided_by))} | "
-                f"{cell(last_text(p))} | {p.last_devlog_date or ''} | {cell(p.folded.note)} |" for p in rows]
+                "| プロジェクト | 仕様書フォルダ | Phase | AC | 根拠 | 最後の記録 | 開発ログ | メモ |",
+                "|---|---|---|---|---|---|---|---|"]
+        out += [f"| {link(p)} | {cell(p.project.spec_dir)} | {phase_text(p)} | {ac_text(p)} | "
+                f"{cell(source_text(p.decided_by))} | {cell(last_text(p))} | {p.last_devlog_date or ''} | "
+                f"{cell(p.folded.note)} |" for p in rows]
 
     gh = sorted((p for p in st if p.github), key=lambda p: (p.github["pushed_at"], fold(p.project.name)), reverse=True)
     if gh or board.github_note:
         out += ["", f"## GitHub({len(gh)})", ""]
         if board.github_note:
             out += [cell(board.github_note), ""]
-        out += ["| プロジェクト | リポジトリ | 版 | 最後の push | CI | 状態 |", "|---|---|---|---|---|---|"]
+        out += ["| プロジェクト | リポジトリ | 版 | 最後の push | CI | Issue | 状態 | バッジ |",
+                "|---|---|---|---|---|---|---|---|"]
         out += [f"| {link(p)} | [{p.github['repo']}]({p.github['url']}) | {p.github['release'] or '-'} | "
-                f"{p.github['pushed_at']} | {p.github['ci'] or '-'} | {p.state} |" for p in gh]
+                f"{p.github['pushed_at']} | {p.github['ci'] or '-'} | {p.github.get('issues') or 0} | {p.state} | "
+                f"{badges(p.github)} |" for p in gh]
 
     conf = [p for p in st if p.conflict]
     out += ["", f"## 食い違い({len(conf)})", "", "| プロジェクト | 決めた根拠 | 食い違う証拠 |", "|---|---|---|"]

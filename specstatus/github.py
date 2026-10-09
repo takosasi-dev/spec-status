@@ -21,6 +21,7 @@ TIMEOUT_S = 5
 BUDGET_S = 20           # 1回の読み込みで GitHub に使う時間の上限
 RESERVE = 5             # 残りの回数がこれ以下になったら、続きは次の読み込みに回す
 REFRESH_HOURS = 6
+CACHE_VERSION = 2       # 2: 一覧に open_issues_count を足した
 CI_LABEL = {"success": "成功", "failure": "失敗", "cancelled": "取消", "timed_out": "失敗"}
 
 Fetch = Callable[[str, str], tuple[int, object, bytes]]
@@ -59,7 +60,7 @@ def _norm(s: str) -> str:
 
 # 取った物は使う所だけ残して保存する
 def _trim_repos(data) -> list[dict]:
-    return [{k: r.get(k) for k in ("name", "html_url", "pushed_at", "default_branch")} for r in data]
+    return [{k: r.get(k) for k in ("name", "html_url", "pushed_at", "default_branch", "open_issues_count")} for r in data]
 
 
 def _trim_release(data) -> dict | None:
@@ -139,14 +140,17 @@ def info(cache: dict, owner: str, repo: dict) -> dict:
         ci = "実行中" if run["status"] != "completed" else CI_LABEL.get(run["conclusion"], run["conclusion"])
     return {"repo": f"{owner}/{repo['name']}", "url": repo.get("html_url") or "",
             "pushed_at": _local_day(repo.get("pushed_at")), "release": rel["tag"] if rel else None,
-            "release_at": rel["at"] if rel else None, "ci": ci}
+            "release_at": rel["at"] if rel else None, "ci": ci,
+            "issues": repo.get("open_issues_count"), "branch": repo.get("default_branch") or "main"}
 
 
 def _load(path: str) -> dict:
+    """保存の形(CACHE_VERSION)が違えば捨てる(304 では残した形のまま使い続けてしまうため)。"""
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
+            c = json.load(f)
+        return c.get("urls", {}) if c.get("version") == CACHE_VERSION else {}
+    except (OSError, ValueError, AttributeError):
         return {}
 
 
@@ -154,7 +158,7 @@ def _save(path: str, cache: dict) -> None:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False)
+            json.dump({"version": CACHE_VERSION, "urls": cache}, f, ensure_ascii=False)
     except OSError:
         pass        # 保存できなくても次に取り直すだけ
 
