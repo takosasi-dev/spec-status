@@ -237,6 +237,7 @@ def test_run_notify_config_error(tmp_path, monkeypatch):
 def test_run_notify_saves_state_only_after_toast(tmp_path, monkeypatch):
     from specstatus import core
     monkeypatch.setattr(core, "load", lambda vault, cfg: board(ps("A", "W/A", waiting="確認待ち")))
+    monkeypatch.setattr(core, "refresh_outputs", lambda b: False)        # 出力の作り直しはここでは見ない(test_core)
     st = os.path.join(os.environ["LOCALAPPDATA"], "SpecStatus", "notify.json")
 
     def fail(title, body):

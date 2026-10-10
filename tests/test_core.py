@@ -435,3 +435,25 @@ def test_where_hook(vault, tmp_path, capsys):  # AC-35
     jpath.write_text("{壊れた", encoding="utf-8")
     assert run(vault, cfg, "where", str(impl), "--hook") == 0
     assert capsys.readouterr().out == ""
+
+
+def test_refresh_outputs_follows_plugin_records(vault):
+    """Obsidian のプラグインが自分のファイルに足した記録で、出力が作り直される。手元のほうが少なければ触らない。"""
+    cfg = make_config(vault)
+    assert run(vault, cfg, "build") == 0
+    b = core.load(str(vault), cfg)
+    jpath = Path(core.output_paths(b)[1])
+    assert json.loads(jpath.read_text(encoding="utf-8"))["record_count"] == 0
+    assert core.refresh_outputs(b) is False                     # 同じ数なら作り直さない
+    ev = vault / "spec-status" / "data" / "events"
+    rec = {"v": 1, "at": "2026-10-10T10:00:00+09:00", "pc": "obsidian-ios-ab12", "by": "user", "doc": "App_仕様書",
+           "path": f"{SPEC}/Android/App/App_仕様書.md", "state": "一部未実装", "done_phase": 2}
+    w(ev / "obsidian-ios-ab12.jsonl", json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+    assert core.refresh_outputs(core.load(str(vault), cfg)) is True
+    out = json.loads(jpath.read_text(encoding="utf-8"))
+    app = next(p for p in out["projects"] if p["name"] == "App")
+    assert out["record_count"] == 1 and app["state"] == "一部未実装" and app["done_phase"] == 2
+    # 同期がまだで手元の記録のほうが少ないとき: 新しい出力を古い中身で上書きしない
+    (ev / "obsidian-ios-ab12.jsonl").unlink()
+    assert core.refresh_outputs(core.load(str(vault), cfg)) is False
+    assert json.loads(jpath.read_text(encoding="utf-8"))["record_count"] == 1

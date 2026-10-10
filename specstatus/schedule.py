@@ -234,6 +234,10 @@ def run(args, vault: str) -> int:
         if args.cmd == "notify":
             from . import core
             board = core.load(vault, args.config)
+            try:
+                core.refresh_outputs(board)      # Obsidian や別の PC が足した記録を、朝に一覧ノートと JSON に追いつかせる
+            except OSError:
+                pass
             msg = notify_summary(board, save=False)
             if msg is None:
                 save_state(board)

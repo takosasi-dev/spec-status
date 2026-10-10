@@ -1,5 +1,5 @@
 # SpecStatus の GUI(§9.9。tkinter)。一覧の表示・絞り込み・詳細・記録・取り消し・Obsidian/エクスプローラで開く。
-# 記録は core.write_mark、出力は core.build でだけ書く(INV-11)。読み込みと書き込みは別スレッド、部品はメインスレッドだけで触る。
+# 記録は core.write_mark、出力は core.build(と、記録が増えていたときの core.refresh_outputs)でだけ書く(INV-11)。読み込みと書き込みは別スレッド、部品はメインスレッドだけで触る。
 # 表の中身の計算は guilogic(純関数)に任せる。
 from __future__ import annotations
 
@@ -607,6 +607,10 @@ class App:
         def work():
             self.events_stamp = G.events_stamp(events_dir(self.vault))     # 読む前に取る(読む間に増えたら次に戻ったとき読み直す)
             board = self.core.load(self.vault, self.config_path, offline=offline)
+            try:
+                self.core.refresh_outputs(board)     # Obsidian や別の PC が足した記録があれば、一覧ノートと JSON を追いつかせる
+            except OSError:
+                pass
             try:
                 self.icon_paths = icons.find_all(board.statuses, sizes)
             except Exception:       # アイコンが取れなくても一覧は出す

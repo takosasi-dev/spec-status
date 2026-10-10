@@ -142,6 +142,7 @@ def board_json(board: Board, generated_at: str) -> str:
         "schema": 1,
         "generated_at": generated_at,
         "generated_on": board.pc_name,
+        "record_count": board.record_count,      # 畳んだ記録の数(core.refresh_outputs が、作り直しが要るかを見る)
         "skipped_evidence": board.skipped_evidence,
         "projects": [project_json(ps) for ps in board.statuses],
         "unreadable": [{"reader": u.reader, "path": u.path, "reason": u.reason} for u in board.unreadable],

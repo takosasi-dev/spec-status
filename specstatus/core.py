@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import tempfile
 import time
@@ -333,6 +334,23 @@ def write_outputs(board: Board, now: datetime | None = None) -> None:
     js = board_json(board, now.isoformat(timespec="seconds"))
     _replace(md_path, md)
     _replace(json_path, js)
+
+
+def refresh_outputs(board: Board) -> bool:
+    """手元の記録が、出力の JSON に畳まれている数より多ければ、一覧ノートと JSON を作り直す(作り直したら True)。
+    Obsidian のプラグイン(StatusBadge)や別の PC が記録を足した後、mark を待たずに出力を追いつかせる。
+    手元のほうが少ないとき(同期がまだ)は作り直さない(新しい出力を古い中身で上書きしない)。"""
+    _, json_path = output_paths(board)
+    try:
+        with open(json_path, encoding="utf-8") as f:
+            obj = json.load(f)
+        have = obj.get("record_count") if isinstance(obj, dict) else None
+    except (OSError, ValueError):
+        have = None
+    if isinstance(have, int) and board.record_count <= have:
+        return False
+    write_outputs(board)
+    return True
 
 
 def build(vault: str, config_path: str | None, offline: bool = False) -> tuple[int, str, Board | None]:
